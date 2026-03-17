@@ -1,0 +1,50 @@
+{
+  "name": "sandcastle",
+  "version": "0.0.1",
+  "description": "CLI for orchestrating AI agents in isolated sandbox environments",
+  "type": "module",
+  "bin": {
+    "sandcastle": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsgo --project tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky"
+  },
+  "keywords": [
+    "cli",
+    "sandbox",
+    "docker",
+    "ai",
+    "agent"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@changesets/cli": "^2.29.4",
+    "@effect/vitest": "^0.28.0",
+    "@typescript/native-preview": "^7.0.0-dev.20250601",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "@effect/cli": "^0.74.0",
+    "@effect/platform": "^0.95.0",
+    "@effect/platform-node": "^0.105.0",
+    "@effect/printer": "^0.48.0",
+    "@effect/printer-ansi": "^0.48.0",
+    "effect": "^3.20.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json,md}": "prettier --write"
+  },
+  "files": [
+    "dist"
+  ]
+}
