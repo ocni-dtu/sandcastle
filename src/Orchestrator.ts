@@ -1,6 +1,7 @@
 import { Console, Effect } from "effect";
 import type { SandcastleConfig } from "./Config.js";
 import { Sandbox, SandboxError, type SandboxService } from "./Sandbox.js";
+import { SandboxFactory } from "./SandboxFactory.js";
 import { syncIn, syncOut } from "./SyncService.js";
 
 const execOk = (
@@ -134,9 +135,9 @@ export interface OrchestrateResult {
 
 export const orchestrate = (
   options: OrchestrateOptions,
-): Effect.Effect<OrchestrateResult, SandboxError, Sandbox> =>
+): Effect.Effect<OrchestrateResult, SandboxError, SandboxFactory> =>
   Effect.gen(function* () {
-    const sandbox = yield* Sandbox;
+    const factory = yield* SandboxFactory;
     const {
       hostRepoDir,
       sandboxRepoDir,
@@ -146,52 +147,64 @@ export const orchestrate = (
       prompt,
     } = options;
 
-    // Initial sync-in
-    yield* Console.log("Syncing repo into sandbox...");
-    yield* syncIn(hostRepoDir, sandboxRepoDir, config);
-
     for (let i = 1; i <= iterations; i++) {
       yield* Console.log(`\n=== Iteration ${i}/${iterations} ===\n`);
 
-      // Record HEAD before agent runs
-      const baseHead = yield* getSandboxHead(sandbox, sandboxRepoDir);
+      const iterationResult = yield* factory.withSandbox(
+        Effect.gen(function* () {
+          const sandbox = yield* Sandbox;
 
-      // Fetch context
-      const issues = yield* fetchIssues(sandbox, sandboxRepoDir, repoFullName);
-      const ralphCommits = yield* fetchRalphCommits(sandbox, sandboxRepoDir);
+          // Sync-in for this iteration's fresh sandbox
+          yield* Console.log("Syncing repo into sandbox...");
+          yield* syncIn(hostRepoDir, sandboxRepoDir, config);
 
-      // Build full prompt with context
-      const fullPrompt = `ISSUES: ${issues}\n\nPrevious RALPH commits: ${ralphCommits}\n\n${prompt}`;
+          // Record HEAD before agent runs
+          const baseHead = yield* getSandboxHead(sandbox, sandboxRepoDir);
 
-      // Invoke the agent
-      yield* Console.log("Running agent...");
-      const agentOutput = yield* invokeAgent(
-        sandbox,
-        sandboxRepoDir,
-        fullPrompt,
+          // Fetch context
+          const issues = yield* fetchIssues(
+            sandbox,
+            sandboxRepoDir,
+            repoFullName,
+          );
+          const ralphCommits = yield* fetchRalphCommits(
+            sandbox,
+            sandboxRepoDir,
+          );
+
+          // Build full prompt with context
+          const fullPrompt = `ISSUES: ${issues}\n\nPrevious RALPH commits: ${ralphCommits}\n\n${prompt}`;
+
+          // Invoke the agent
+          yield* Console.log("Running agent...");
+          const agentOutput = yield* invokeAgent(
+            sandbox,
+            sandboxRepoDir,
+            fullPrompt,
+          );
+
+          // Check for new commits and sync out
+          const newHead = yield* getSandboxHead(sandbox, sandboxRepoDir);
+          if (newHead !== baseHead) {
+            yield* Console.log("New commits detected. Syncing out...");
+            yield* syncOut(hostRepoDir, sandboxRepoDir, baseHead);
+          } else {
+            yield* Console.log("No new commits in this iteration.");
+          }
+
+          // Check completion signal
+          if (agentOutput.includes(COMPLETION_SIGNAL)) {
+            return { complete: true } as const;
+          }
+          return { complete: false } as const;
+        }),
       );
 
-      // Check for new commits and sync out
-      const newHead = yield* getSandboxHead(sandbox, sandboxRepoDir);
-      if (newHead !== baseHead) {
-        yield* Console.log("New commits detected. Syncing out...");
-        yield* syncOut(hostRepoDir, sandboxRepoDir, baseHead);
-      } else {
-        yield* Console.log("No new commits in this iteration.");
-      }
-
-      // Check completion signal
-      if (agentOutput.includes(COMPLETION_SIGNAL)) {
+      if (iterationResult.complete) {
         yield* Console.log(
           `\nAgent signaled completion after ${i} iteration(s).`,
         );
         return { iterationsRun: i, complete: true };
-      }
-
-      // Re-sync for next iteration
-      if (i < iterations) {
-        yield* Console.log("Re-syncing sandbox for next iteration...");
-        yield* syncIn(hostRepoDir, sandboxRepoDir, config);
       }
     }
 

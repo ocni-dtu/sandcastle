@@ -12,6 +12,7 @@ import {
   type OrchestrateOptions,
 } from "./Orchestrator.js";
 import { Sandbox } from "./Sandbox.js";
+import { SandboxFactory } from "./SandboxFactory.js";
 
 const execAsync = promisify(exec);
 
@@ -49,6 +50,20 @@ const toStreamJson = (output: string): string => {
   lines.push(JSON.stringify({ type: "result", result: output }));
   return lines.join("\n");
 };
+
+/**
+ * Wrap a Sandbox layer into a SandboxFactory layer.
+ * Each withSandbox call provides the given sandbox layer.
+ */
+const wrapAsFactory = (
+  sandboxLayer: Layer.Layer<Sandbox>,
+): Layer.Layer<SandboxFactory> =>
+  Layer.succeed(SandboxFactory, {
+    withSandbox: <A, E, R>(effect: Effect.Effect<A, E, R | Sandbox>) =>
+      effect.pipe(
+        Effect.provide(sandboxLayer),
+      ) as Effect.Effect<A, E, Exclude<R, Sandbox>>,
+  });
 
 /**
  * Create a mock sandbox layer that intercepts `claude` commands
@@ -134,7 +149,7 @@ describe("Orchestrator", () => {
         iterations: 1,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(result.iterationsRun).toBe(1);
@@ -165,7 +180,7 @@ describe("Orchestrator", () => {
         iterations: 5,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(result.iterationsRun).toBe(1);
@@ -209,7 +224,7 @@ describe("Orchestrator", () => {
         iterations: 5,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(result.iterationsRun).toBe(3);
@@ -242,7 +257,7 @@ describe("Orchestrator", () => {
         iterations: 2,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(result.iterationsRun).toBe(2);
@@ -369,7 +384,7 @@ describe("Orchestrator error handling", () => {
         iterations: 1,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(exit._tag).toBe("Failure");
@@ -427,7 +442,7 @@ describe("Orchestrator error handling", () => {
         iterations: 5,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     // Should detect COMPLETE from the stdout fallback
@@ -505,7 +520,7 @@ describe("Orchestrator error handling", () => {
         iterations: 3,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     // Should have failed on iteration 2
@@ -529,7 +544,7 @@ describe("Orchestrator error handling", () => {
         iterations: 1,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(exit._tag).toBe("Failure");
@@ -590,7 +605,7 @@ describe("Orchestrator error handling", () => {
         iterations: 1,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(exit._tag).toBe("Failure");
@@ -649,7 +664,7 @@ describe("Orchestrator streaming", () => {
         iterations: 1,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(capturedCommand).toContain("--output-format stream-json");
@@ -677,7 +692,7 @@ describe("Orchestrator streaming", () => {
         iterations: 5,
         repoFullName: "test/repo",
         prompt: "do some work",
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(wrapAsFactory(layer))),
     );
 
     expect(result.iterationsRun).toBe(1);

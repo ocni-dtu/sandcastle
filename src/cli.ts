@@ -1,5 +1,5 @@
 import { Command, Options } from "@effect/cli";
-import { Console, Effect } from "effect";
+import { Console, Effect, Layer } from "effect";
 import { execFile, spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
@@ -14,7 +14,8 @@ import {
 } from "./DockerLifecycle.js";
 import { scaffold } from "./InitService.js";
 import { orchestrate } from "./Orchestrator.js";
-import { SandboxError } from "./Sandbox.js";
+import { Sandbox, SandboxError } from "./Sandbox.js";
+import { SandboxFactory } from "./SandboxFactory.js";
 import { syncIn, syncOut } from "./SyncService.js";
 import { resolveTokens } from "./TokenResolver.js";
 
@@ -310,7 +311,13 @@ const runCommand = Command.make(
       yield* Console.log(`Iterations: ${resolvedIterations}`);
       yield* Console.log(``);
 
-      const layer = DockerSandbox.layer(container);
+      const sandboxLayer = DockerSandbox.layer(container);
+      const factoryLayer = Layer.succeed(SandboxFactory, {
+        withSandbox: <A, E, R>(effect: Effect.Effect<A, E, R | Sandbox>) =>
+          effect.pipe(
+            Effect.provide(sandboxLayer),
+          ) as Effect.Effect<A, E, Exclude<R, Sandbox>>,
+      });
 
       const result = yield* orchestrate({
         hostRepoDir,
@@ -319,7 +326,7 @@ const runCommand = Command.make(
         config,
         repoFullName,
         prompt,
-      }).pipe(Effect.provide(layer));
+      }).pipe(Effect.provide(factoryLayer));
 
       if (result.complete) {
         yield* Console.log(
