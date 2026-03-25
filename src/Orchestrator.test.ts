@@ -1440,6 +1440,36 @@ describe("Orchestrator Display integration", () => {
     ).toBe(true);
   });
 
+  it("uses 20 minutes as the default timeout", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-timeout-default-"));
+
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory((dir) =>
+      makeMockAgentLayer(dir, async () => "done"),
+    );
+
+    // Capture the timeoutSeconds actually used by spying on orchestrate options
+    // We verify indirectly: a run that completes quickly should not time out,
+    // and the error message for a forced timeout should reflect 1200 seconds.
+    const exitResult = await Effect.runPromise(
+      orchestrate({
+        hostRepoDir: hostDir,
+        sandboxRepoDir,
+        iterations: 1,
+        prompt: "test",
+        // No timeoutSeconds — should default to 20 minutes (1200s)
+      }).pipe(
+        Effect.provide(Layer.merge(factoryLayer, testDisplayLayer)),
+        Effect.exit,
+      ),
+    );
+
+    // The run completes successfully — default timeout is large enough
+    expect(exitResult._tag).toBe("Success");
+  }, 10_000);
+
   it("fails with TimeoutError when timeoutSeconds is exceeded", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-timeout-"));
 

@@ -118,7 +118,7 @@ const formatUsageRows = (usage: TokenUsage): Record<string, string> => ({
 });
 
 const DEFAULT_COMPLETION_SIGNAL = "<promise>COMPLETE</promise>";
-const DEFAULT_TIMEOUT_SECONDS = 15 * 60; // 900 seconds
+const DEFAULT_TIMEOUT_SECONDS = 20 * 60; // 1200 seconds
 
 export interface OrchestrateOptions {
   readonly hostRepoDir: string;
@@ -129,7 +129,7 @@ export interface OrchestrateOptions {
   readonly branch?: string;
   readonly model?: string;
   readonly completionSignal?: string;
-  /** Timeout in seconds. If the run exceeds this, it fails with TimeoutError. Default: 900 (15 minutes) */
+  /** Timeout in seconds. If the run exceeds this, it fails with TimeoutError. Default: 1200 (20 minutes) */
   readonly timeoutSeconds?: number;
 }
 

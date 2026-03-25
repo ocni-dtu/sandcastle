@@ -82,7 +82,7 @@ export interface RunOptions {
   readonly logging?: LoggingOption;
   /** Custom completion signal string (default: "<promise>COMPLETE</promise>") */
   readonly completionSignal?: string;
-  /** Timeout in seconds. If the run exceeds this, it fails. Default: 900 (15 minutes) */
+  /** Timeout in seconds. If the run exceeds this, it fails. Default: 1200 (20 minutes) */
   readonly timeoutSeconds?: number;
 }
 

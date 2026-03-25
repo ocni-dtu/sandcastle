@@ -217,7 +217,7 @@ const completionSignalOption = Options.text("completion-signal").pipe(
 
 const timeoutOption = Options.integer("timeout").pipe(
   Options.withDescription(
-    "Timeout in seconds for the entire run (default: 900, i.e. 15 minutes)",
+    "Timeout in seconds for the entire run (default: 1200, i.e. 20 minutes)",
   ),
   Options.optional,
 );
