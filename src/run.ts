@@ -84,6 +84,8 @@ export interface RunOptions {
   readonly completionSignal?: string;
   /** Timeout in seconds. If the run exceeds this, it fails. Default: 900 (15 minutes) */
   readonly timeoutSeconds?: number;
+  /** Optional name for the run, shown as a prefix in log output */
+  readonly name?: string;
 }
 
 export interface RunResult {
@@ -209,7 +211,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const d = yield* Display;
-      yield* d.intro("sandcastle");
+      yield* d.intro(options.name ?? "sandcastle");
       const rows: Record<string, string> = {
         Image: resolvedImageName,
         "Max iterations": String(maxIterations),
@@ -235,6 +237,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
         model: resolvedModel,
         completionSignal: options.completionSignal,
         timeoutSeconds: options.timeoutSeconds,
+        name: options.name,
       });
     }).pipe(Effect.provide(runLayer)),
   );

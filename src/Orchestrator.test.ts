@@ -1440,6 +1440,75 @@ describe("Orchestrator Display integration", () => {
     ).toBe(true);
   });
 
+  it("prefixes status messages with [name] when name is provided", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-name-"));
+
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(ref);
+
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory((dir) =>
+      makeMockAgentLayer(dir, async () => {
+        return "All done. <promise>COMPLETE</promise>";
+      }),
+    );
+
+    await Effect.runPromise(
+      orchestrate({
+        hostRepoDir: hostDir,
+        sandboxRepoDir,
+        iterations: 1,
+        prompt: "do some work",
+        name: "issue-42",
+      }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
+    );
+
+    const entries = await Effect.runPromise(Ref.get(ref));
+    const statusEntries = entries.filter((e) => e._tag === "status");
+
+    // All status messages should be prefixed with [issue-42]
+    expect(statusEntries.every((e) => e.message.startsWith("[issue-42]"))).toBe(
+      true,
+    );
+    // Iteration message should still be readable
+    expect(statusEntries.some((e) => e.message.includes("Iteration 1/1"))).toBe(
+      true,
+    );
+  });
+
+  it("does not prefix status messages when no name is provided", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-noname-"));
+
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(ref);
+
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory((dir) =>
+      makeMockAgentLayer(dir, async () => {
+        return "All done. <promise>COMPLETE</promise>";
+      }),
+    );
+
+    await Effect.runPromise(
+      orchestrate({
+        hostRepoDir: hostDir,
+        sandboxRepoDir,
+        iterations: 1,
+        prompt: "do some work",
+      }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
+    );
+
+    const entries = await Effect.runPromise(Ref.get(ref));
+    const statusEntries = entries.filter((e) => e._tag === "status");
+
+    // No status messages should be prefixed with brackets
+    expect(statusEntries.every((e) => !e.message.startsWith("["))).toBe(true);
+  });
+
   it("fails with TimeoutError when timeoutSeconds is exceeded", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-timeout-"));
 

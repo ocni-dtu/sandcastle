@@ -131,6 +131,8 @@ export interface OrchestrateOptions {
   readonly completionSignal?: string;
   /** Timeout in seconds. If the run exceeds this, it fails with TimeoutError. Default: 900 (15 minutes) */
   readonly timeoutSeconds?: number;
+  /** Optional name for the run, prepended to status messages as [name] */
+  readonly name?: string;
 }
 
 export interface OrchestrateResult {
@@ -154,12 +156,15 @@ export const orchestrate = (
     const completionSignal =
       options.completionSignal ?? DEFAULT_COMPLETION_SIGNAL;
 
+    const label = (msg: string): string =>
+      options.name ? `[${options.name}] ${msg}` : msg;
+
     const allCommits: { sha: string }[] = [];
     let allStdout = "";
     let resolvedBranch = "";
 
     for (let i = 1; i <= iterations; i++) {
-      yield* display.status(`Iteration ${i}/${iterations}`, "info");
+      yield* display.status(label(`Iteration ${i}/${iterations}`), "info");
 
       const lifecycleResult = yield* factory.withSandbox(
         ({ hostWorktreePath }) =>
@@ -181,7 +186,7 @@ export const orchestrate = (
                   ctx.sandboxRepoDir,
                 );
 
-                yield* display.status("Agent started", "success");
+                yield* display.status(label("Agent started"), "success");
 
                 // Invoke the agent
                 const onText = (text: string) =>
@@ -194,7 +199,7 @@ export const orchestrate = (
                   onText,
                 );
 
-                yield* display.status("Agent stopped", "info");
+                yield* display.status(label("Agent stopped"), "info");
 
                 // Log usage summary
                 if (usage) {
@@ -222,7 +227,7 @@ export const orchestrate = (
 
       if (lifecycleResult.result.wasCompletionSignalDetected) {
         yield* display.status(
-          `Agent signaled completion after ${i} iteration(s).`,
+          label(`Agent signaled completion after ${i} iteration(s).`),
           "success",
         );
         return {
@@ -235,7 +240,10 @@ export const orchestrate = (
       }
     }
 
-    yield* display.status(`Reached max iterations (${iterations}).`, "info");
+    yield* display.status(
+      label(`Reached max iterations (${iterations}).`),
+      "info",
+    );
     return {
       iterationsRun: iterations,
       wasCompletionSignalDetected: false,

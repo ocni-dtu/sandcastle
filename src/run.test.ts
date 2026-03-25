@@ -43,6 +43,16 @@ describe("RunOptions", () => {
     const opts: RunOptions = { prompt: "test" };
     expect(opts.timeoutSeconds).toBeUndefined();
   });
+
+  it("allows name to be specified", () => {
+    const opts: RunOptions = { prompt: "test", name: "my-run" };
+    expect(opts.name).toBe("my-run");
+  });
+
+  it("allows name to be omitted", () => {
+    const opts: RunOptions = { prompt: "test" };
+    expect(opts.name).toBeUndefined();
+  });
 });
 
 describe("USE_WORKTREE_MODE", () => {

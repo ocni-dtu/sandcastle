@@ -222,6 +222,11 @@ const timeoutOption = Options.integer("timeout").pipe(
   Options.optional,
 );
 
+const nameOption = Options.text("name").pipe(
+  Options.withDescription("Optional name for the run, shown in log output"),
+  Options.optional,
+);
+
 const runCommand = Command.make(
   "run",
   {
@@ -235,6 +240,7 @@ const runCommand = Command.make(
     promptArgs: promptArgOption,
     completionSignal: completionSignalOption,
     timeout: timeoutOption,
+    name: nameOption,
   },
   ({
     iterations,
@@ -247,6 +253,7 @@ const runCommand = Command.make(
     promptArgs,
     completionSignal,
     timeout,
+    name,
   }) =>
     Effect.gen(function* () {
       const d = yield* Display;
@@ -286,6 +293,8 @@ const runCommand = Command.make(
       const resolvedTimeout =
         timeout._tag === "Some" ? timeout.value : undefined;
 
+      const resolvedName = name._tag === "Some" ? name.value : undefined;
+
       const result = yield* Effect.tryPromise({
         try: () =>
           run({
@@ -303,6 +312,7 @@ const runCommand = Command.make(
             logging: { type: "stdout" },
             completionSignal: resolvedCompletionSignal,
             timeoutSeconds: resolvedTimeout,
+            name: resolvedName,
           }),
         catch: (e) =>
           new AgentError({

@@ -60,6 +60,11 @@ describe("sandcastle CLI", () => {
     expect(stdout).toContain("--timeout");
   });
 
+  it("run --help shows --name flag", async () => {
+    const { stdout } = await runCli("run --help", process.cwd());
+    expect(stdout).toContain("--name");
+  });
+
   it("run command errors when .sandcastle/ is missing", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
     await initRepo(hostDir);
