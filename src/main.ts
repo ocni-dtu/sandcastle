@@ -3,6 +3,7 @@ import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { cli } from "./cli.js";
 import { ClackDisplay } from "./Display.js";
+import { withFriendlyErrors } from "./ErrorHandler.js";
 import { setupTerminalCleanup } from "./terminalCleanup.js";
 
 // Restore terminal state on any exit.
@@ -14,4 +15,8 @@ setupTerminalCleanup();
 
 const mainLayer = Layer.merge(NodeContext.layer, ClackDisplay.layer);
 
-cli(process.argv).pipe(Effect.provide(mainLayer), NodeRuntime.runMain);
+cli(process.argv).pipe(
+  withFriendlyErrors,
+  Effect.provide(mainLayer),
+  NodeRuntime.runMain,
+);
