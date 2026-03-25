@@ -58,6 +58,8 @@ export interface RunResult {
   readonly stdout: string;
   readonly commits: { sha: string }[];
   readonly branch: string;
+  /** Path to the log file, if logging was drained to a file. */
+  readonly logFilePath?: string;
 }
 
 const SANDBOX_REPOS_DIR = "/home/agent/repos";
@@ -177,5 +179,9 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
     }).pipe(Effect.provide(runLayer)),
   );
 
-  return result;
+  return {
+    ...result,
+    logFilePath:
+      resolvedLogging.type === "file" ? resolvedLogging.path : undefined,
+  };
 };

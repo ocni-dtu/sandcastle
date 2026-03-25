@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeBranchForFilename } from "./run.js";
+import { sanitizeBranchForFilename, type RunResult } from "./run.js";
+
+describe("RunResult", () => {
+  it("includes logFilePath when logging to a file", () => {
+    const result: RunResult = {
+      iterationsRun: 1,
+      wasCompletionSignalDetected: false,
+      stdout: "",
+      commits: [],
+      branch: "main",
+      logFilePath: "/path/to/sandcastle.log",
+    };
+    expect(result.logFilePath).toBe("/path/to/sandcastle.log");
+  });
+
+  it("allows logFilePath to be absent when logging to stdout", () => {
+    const result: RunResult = {
+      iterationsRun: 1,
+      wasCompletionSignalDetected: false,
+      stdout: "",
+      commits: [],
+      branch: "main",
+    };
+    expect(result.logFilePath).toBeUndefined();
+  });
+});
 
 describe("sanitizeBranchForFilename", () => {
   it("passes through a simple branch name unchanged", () => {
