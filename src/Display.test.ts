@@ -394,6 +394,98 @@ describe("FileDisplay", () => {
   });
 });
 
+describe("SilentDisplay - toolCall", () => {
+  const setup = () => {
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const layer = SilentDisplay.layer(ref);
+    return { ref, layer };
+  };
+
+  it("stores toolCall entries for test assertions", async () => {
+    const { ref, layer } = setup();
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.toolCall("Bash", "npm test");
+        return yield* Ref.get(ref);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(entries).toEqual([
+      { _tag: "toolCall", name: "Bash", formattedArgs: "npm test" },
+    ]);
+  });
+
+  it("stores multiple toolCall entries in order", async () => {
+    const { ref, layer } = setup();
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.toolCall("Bash", "npm install");
+        yield* d.toolCall("WebSearch", "npm trusted publishing OIDC");
+        yield* d.toolCall("Agent", "Run tests");
+        return yield* Ref.get(ref);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(entries).toEqual([
+      { _tag: "toolCall", name: "Bash", formattedArgs: "npm install" },
+      {
+        _tag: "toolCall",
+        name: "WebSearch",
+        formattedArgs: "npm trusted publishing OIDC",
+      },
+      { _tag: "toolCall", name: "Agent", formattedArgs: "Run tests" },
+    ]);
+  });
+});
+
+describe("FileDisplay - toolCall", () => {
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), "sandcastle-display-"));
+    const logPath = join(dir, "test.log");
+    const layer = Layer.provide(
+      FileDisplay.layer(logPath),
+      NodeFileSystem.layer,
+    );
+    return { logPath, layer };
+  };
+
+  const readLog = (logPath: string) => readFileSync(logPath, "utf-8");
+
+  it("writes tool call as Name(args) line in log file", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.toolCall("Bash", "npm test");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("Bash(npm test)");
+  });
+
+  it("writes different tool types correctly", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.toolCall("WebSearch", "npm trusted publishing OIDC");
+        yield* d.toolCall("Agent", "Run tests");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("WebSearch(npm trusted publishing OIDC)");
+    expect(log).toContain("Agent(Run tests)");
+  });
+});
+
 describe("terminalStyle", () => {
   beforeEach(() => {
     process.env.FORCE_COLOR = "1";
