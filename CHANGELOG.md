@@ -1,5 +1,11 @@
 # @ai-hero/sandcastle
 
+## 0.1.5
+
+### Patch Changes
+
+- 1cd8bdb: Close GitHub issue when single-branch merge is performed directly in parallel-planner template
+
 ## 0.1.4
 
 ### Patch Changes
