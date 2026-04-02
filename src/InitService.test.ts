@@ -372,7 +372,7 @@ describe("InitService scaffold", () => {
 
   describe("getNextStepsLines", () => {
     it("blank template returns steps mentioning .env and main.ts (not npx sandcastle run)", () => {
-      const lines = getNextStepsLines("blank", claudeCodeAgent);
+      const lines = getNextStepsLines("blank");
       expect(lines.length).toBeGreaterThanOrEqual(2);
       const joined = lines.join("\n");
       expect(joined).toContain(".env");
@@ -381,7 +381,7 @@ describe("InitService scaffold", () => {
     });
 
     it("non-blank template returns steps mentioning .env, package.json scripts, and npm run sandcastle", () => {
-      const lines = getNextStepsLines("simple-loop", claudeCodeAgent);
+      const lines = getNextStepsLines("simple-loop");
       const joined = lines.join("\n");
       expect(joined).toContain(".env");
       expect(joined).toContain("package.json");
@@ -389,54 +389,54 @@ describe("InitService scaffold", () => {
     });
 
     it("non-blank template includes a note about customizing the install command", () => {
-      const lines = getNextStepsLines("simple-loop", claudeCodeAgent);
+      const lines = getNextStepsLines("simple-loop");
       const joined = lines.join("\n");
       expect(joined).toContain("npm install");
       expect(joined).toContain("onSandboxReady");
     });
 
     it("non-blank template mentions copyToSandbox and node_modules", () => {
-      const lines = getNextStepsLines("simple-loop", claudeCodeAgent);
+      const lines = getNextStepsLines("simple-loop");
       const joined = lines.join("\n");
       expect(joined).toContain("copyToSandbox");
       expect(joined).toContain("node_modules");
     });
 
     it("blank template includes a step to customize prompt.md", () => {
-      const lines = getNextStepsLines("blank", claudeCodeAgent);
+      const lines = getNextStepsLines("blank");
       const joined = lines.join("\n");
       expect(joined).toContain("prompt.md");
     });
 
     it("simple-loop template includes a step to read/customize prompt files", () => {
-      const lines = getNextStepsLines("simple-loop", claudeCodeAgent);
+      const lines = getNextStepsLines("simple-loop");
       const joined = lines.join("\n");
       expect(joined).toContain("prompt");
       expect(joined).toMatch(/customiz|review|read/i);
     });
 
     it("sequential-reviewer template includes a step mentioning prompt files", () => {
-      const lines = getNextStepsLines("sequential-reviewer", claudeCodeAgent);
+      const lines = getNextStepsLines("sequential-reviewer");
       const joined = lines.join("\n");
       expect(joined).toContain("prompt");
       expect(joined).toMatch(/customiz|review|read/i);
     });
 
     it("parallel-planner template includes a step mentioning prompt files", () => {
-      const lines = getNextStepsLines("parallel-planner", claudeCodeAgent);
+      const lines = getNextStepsLines("parallel-planner");
       const joined = lines.join("\n");
       expect(joined).toContain("prompt");
       expect(joined).toMatch(/customiz|review|read/i);
     });
 
     it("returns at least 2 numbered steps for blank template", () => {
-      const lines = getNextStepsLines("blank", claudeCodeAgent);
+      const lines = getNextStepsLines("blank");
       const numberedSteps = lines.filter((l) => /^\d+\./.test(l));
       expect(numberedSteps.length).toBeGreaterThanOrEqual(2);
     });
 
     it("returns at least 3 numbered steps for non-blank templates", () => {
-      const lines = getNextStepsLines("simple-loop", claudeCodeAgent);
+      const lines = getNextStepsLines("simple-loop");
       const numberedSteps = lines.filter((l) => /^\d+\./.test(l));
       expect(numberedSteps.length).toBeGreaterThanOrEqual(3);
     });

@@ -103,10 +103,7 @@ export const getAgent = (name: string): AgentEntry | undefined =>
 // Next steps
 // ---------------------------------------------------------------------------
 
-export function getNextStepsLines(
-  template: string,
-  agent: AgentEntry,
-): string[] {
+export function getNextStepsLines(template: string): string[] {
   if (template === "blank") {
     return [
       "Next steps:",
