@@ -1,4 +1,5 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // Blank template: customize this to build your own orchestration.
 // Run this with: npx tsx .sandcastle/main.mts
@@ -6,5 +7,6 @@ import { run, claudeCode } from "@ai-hero/sandcastle";
 
 await run({
   agent: claudeCode("claude-opus-4-6"),
+  sandbox: docker(),
   promptFile: "./.sandcastle/prompt.md",
 });

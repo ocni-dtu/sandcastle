@@ -13,6 +13,17 @@ import {
   type WorktreeMode,
 } from "./run.js";
 import { claudeCode } from "./AgentProvider.js";
+import { createBindMountSandboxProvider } from "./SandboxProvider.js";
+
+const testSandbox = createBindMountSandboxProvider({
+  name: "test",
+  create: async () => ({
+    workspacePath: "/home/agent/workspace",
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    close: async () => {},
+  }),
+});
 
 describe("printFileDisplayStartup", () => {
   let consoleSpy: ReturnType<typeof vi.spyOn>;
@@ -150,9 +161,18 @@ describe("RunOptions", () => {
     const _opts: RunOptions = { prompt: "test" };
   });
 
+  it("requires sandbox field typed as SandboxProvider", () => {
+    // @ts-expect-error sandbox is required
+    const _opts: RunOptions = {
+      agent: claudeCode("claude-opus-4-6"),
+      prompt: "test",
+    };
+  });
+
   it("allows idleTimeoutSeconds to be specified", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
       idleTimeoutSeconds: 120,
     };
@@ -162,6 +182,7 @@ describe("RunOptions", () => {
   it("allows idleTimeoutSeconds to be omitted (uses default)", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
     };
     expect(opts.idleTimeoutSeconds).toBeUndefined();
@@ -170,6 +191,7 @@ describe("RunOptions", () => {
   it("allows name to be specified", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
       name: "my-run",
     };
@@ -179,6 +201,7 @@ describe("RunOptions", () => {
   it("allows name to be omitted", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
     };
     expect(opts.name).toBeUndefined();
@@ -187,6 +210,7 @@ describe("RunOptions", () => {
   it("accepts worktree with none mode", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
       worktree: { mode: "none" },
     };
@@ -196,6 +220,7 @@ describe("RunOptions", () => {
   it("accepts worktree with temp-branch mode", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
       worktree: { mode: "temp-branch" },
     };
@@ -205,6 +230,7 @@ describe("RunOptions", () => {
   it("accepts worktree with branch mode", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
       worktree: { mode: "branch", branch: "feature/my-work" },
     };
@@ -217,6 +243,7 @@ describe("RunOptions", () => {
   it("allows worktree to be omitted (defaults to temp-branch)", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
     };
     expect(opts.worktree).toBeUndefined();
@@ -225,10 +252,21 @@ describe("RunOptions", () => {
   it("does not accept a top-level branch field", () => {
     const opts: RunOptions = {
       agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
       prompt: "test",
     };
     // @ts-expect-error branch is no longer a valid field on RunOptions
     expect(opts.branch).toBeUndefined();
+  });
+
+  it("does not accept a top-level imageName field", () => {
+    const opts: RunOptions = {
+      agent: claudeCode("claude-opus-4-6"),
+      sandbox: testSandbox,
+      prompt: "test",
+    };
+    // @ts-expect-error imageName is no longer a valid field on RunOptions
+    expect(opts.imageName).toBeUndefined();
   });
 });
 
@@ -259,6 +297,7 @@ describe("copyToSandbox with mode none", () => {
     await expect(
       run({
         agent: claudeCode("claude-opus-4-6"),
+        sandbox: testSandbox,
         prompt: "test",
         worktree: { mode: "none" },
         copyToSandbox: [".env"],
@@ -274,7 +313,7 @@ describe("buildRunSummaryRows", () => {
     const rows = buildRunSummaryRows({
       name: "Implementer #202",
       agentName: "claude-code",
-      imageName: "sandcastle:myrepo",
+      sandboxName: "docker",
       maxIterations: 3,
       branch: "main",
     });
@@ -284,21 +323,21 @@ describe("buildRunSummaryRows", () => {
   it("falls back to agentName when no name is provided", () => {
     const rows = buildRunSummaryRows({
       agentName: "claude-code",
-      imageName: "sandcastle:myrepo",
+      sandboxName: "docker",
       maxIterations: 1,
       branch: "main",
     });
     expect(rows["Agent"]).toBe("claude-code");
   });
 
-  it("includes image, max iterations, and branch", () => {
+  it("includes sandbox name, max iterations, and branch", () => {
     const rows = buildRunSummaryRows({
       agentName: "claude-code",
-      imageName: "sandcastle:myrepo",
+      sandboxName: "docker",
       maxIterations: 5,
       branch: "sandcastle/issue-160",
     });
-    expect(rows["Image"]).toBe("sandcastle:myrepo");
+    expect(rows["Sandbox"]).toBe("docker");
     expect(rows["Max iterations"]).toBe("5");
     expect(rows["Branch"]).toBe("sandcastle/issue-160");
   });
@@ -306,7 +345,7 @@ describe("buildRunSummaryRows", () => {
   it("does not include a Model row", () => {
     const rows = buildRunSummaryRows({
       agentName: "claude-code",
-      imageName: "sandcastle:myrepo",
+      sandboxName: "docker",
       maxIterations: 1,
       branch: "main",
     });

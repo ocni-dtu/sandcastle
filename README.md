@@ -50,9 +50,11 @@ npx tsx .sandcastle/main.ts
 ```typescript
 // 3. Run the agent via the JS API
 import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 await run({
   agent: claudeCode("claude-opus-4-6"),
+  sandbox: docker(),
   promptFile: ".sandcastle/prompt.md",
 });
 ```
@@ -63,9 +65,11 @@ Sandcastle exports a programmatic `run()` function for use in scripts, CI pipeli
 
 ```typescript
 import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const result = await run({
   agent: claudeCode("claude-opus-4-6"),
+  sandbox: docker(),
   promptFile: ".sandcastle/prompt.md",
 });
 
@@ -78,11 +82,16 @@ console.log(result.branch); // target branch name
 
 ```typescript
 import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const result = await run({
   // Agent provider — required. Pass a model string to claudeCode().
   // Optional second arg for provider-specific options like effort level.
   agent: claudeCode("claude-opus-4-6", { effort: "high" }),
+
+  // Sandbox provider — required. Import from "@ai-hero/sandcastle/sandboxes/docker".
+  // Provider-specific config (like imageName) lives inside the provider factory call.
+  sandbox: docker({ imageName: "sandcastle:local" }),
 
   // Prompt source — provide one of these, not both:
   promptFile: ".sandcastle/prompt.md", // path to a prompt file
@@ -101,13 +110,6 @@ const result = await run({
   // { mode: 'temp-branch' } — create a temp worktree, merge back.
   // { mode: 'branch', branch } — create a worktree on an explicit branch.
   worktree: { mode: "branch", branch: "agent/fix-42" },
-
-  // Sandbox provider — optional. Defaults to Docker internally.
-  // Import from "sandcastle/sandboxes/docker" for explicit Docker usage:
-  // sandbox: docker({ imageName: "sandcastle:local" }),
-
-  // Docker image used for the sandbox. Default: "sandcastle:<repo-dir-name>"
-  imageName: "sandcastle:local",
 
   // Display name for this run, shown as a prefix in log output.
   name: "fix-issue-42",
@@ -149,9 +151,11 @@ Use `run()` instead when you only need a single one-shot invocation — it handl
 
 ```typescript
 import { createSandbox, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 await using sandbox = await createSandbox({
   branch: "agent/fix-42",
+  sandbox: docker(),
 });
 
 const result = await sandbox.run({
@@ -166,9 +170,11 @@ console.log(result.commits); // [{ sha: "abc123" }]
 
 ```typescript
 import { createSandbox, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 await using sandbox = await createSandbox({
   branch: "agent/fix-42",
+  sandbox: docker(),
   hooks: { onSandboxReady: [{ command: "npm install" }] },
 });
 
@@ -195,7 +201,10 @@ Commits from all `run()` calls accumulate on the same branch. The sandbox contai
 #### Manual `close()` with `CloseResult`
 
 ```typescript
-const sandbox = await createSandbox({ branch: "agent/fix-42" });
+const sandbox = await createSandbox({
+  branch: "agent/fix-42",
+  sandbox: docker(),
+});
 // ... run agents ...
 const closeResult = await sandbox.close();
 if (closeResult.preservedWorktreePath) {
@@ -205,12 +214,12 @@ if (closeResult.preservedWorktreePath) {
 
 #### `CreateSandboxOptions`
 
-| Option          | Type     | Default                      | Description                                                         |
-| --------------- | -------- | ---------------------------- | ------------------------------------------------------------------- |
-| `branch`        | string   | —                            | **Required.** Explicit branch for the worktree                      |
-| `imageName`     | string   | `sandcastle:<repo-dir-name>` | Docker image name                                                   |
-| `hooks`         | object   | —                            | Lifecycle hooks (`onSandboxReady`) — run once at creation time      |
-| `copyToSandbox` | string[] | —                            | Host-relative file paths to copy into the worktree at creation time |
+| Option          | Type            | Default | Description                                                         |
+| --------------- | --------------- | ------- | ------------------------------------------------------------------- |
+| `branch`        | string          | —       | **Required.** Explicit branch for the worktree                      |
+| `sandbox`       | SandboxProvider | —       | **Required.** Sandbox provider (e.g. `docker()`)                    |
+| `hooks`         | object          | —       | Lifecycle hooks (`onSandboxReady`) — run once at creation time      |
+| `copyToSandbox` | string[]        | —       | Host-relative file paths to copy into the worktree at creation time |
 
 #### `Sandbox`
 
@@ -423,12 +432,12 @@ Removes the Docker image.
 | Option               | Type               | Default                       | Description                                                                                                             |
 | -------------------- | ------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-6")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4-mini")`) |
+| `sandbox`            | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `docker({ imageName: "sandcastle:local" })`)                           |
 | `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                    |
 | `promptFile`         | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)                                                                  |
 | `maxIterations`      | number             | `1`                           | Maximum iterations to run                                                                                               |
 | `hooks`              | object             | —                             | Lifecycle hooks (`onSandboxReady`)                                                                                      |
 | `worktree`           | WorktreeMode       | `{ mode: 'temp-branch' }`     | Worktree mode: `{ mode: 'none' }`, `{ mode: 'temp-branch' }`, or `{ mode: 'branch', branch }`                           |
-| `imageName`          | string             | `sandcastle:<repo-dir-name>`  | Docker image name for the sandbox                                                                                       |
 | `name`               | string             | —                             | Display name for the run, shown as a prefix in log output                                                               |
 | `promptArgs`         | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                                                    |
 | `copyToSandbox`      | string[]           | —                             | Host-relative file paths to copy into the worktree before start (not supported with `mode: 'none'`)                     |

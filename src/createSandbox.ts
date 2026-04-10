@@ -1,6 +1,4 @@
 import { NodeContext, NodeFileSystem } from "@effect/platform-node";
-import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Effect, Layer, Ref } from "effect";
 import type { AgentProvider } from "./AgentProvider.js";
@@ -10,11 +8,6 @@ import {
   SilentDisplay,
   type DisplayEntry,
 } from "./Display.js";
-import {
-  startContainer,
-  removeContainer,
-  chownInContainer,
-} from "./DockerLifecycle.js";
 import { resolveEnv } from "./EnvResolver.js";
 import { orchestrate } from "./Orchestrator.js";
 import {
@@ -25,16 +18,11 @@ import {
 } from "./PromptArgumentSubstitution.js";
 import { resolvePrompt } from "./PromptResolver.js";
 import type { LoggingOption } from "./run.js";
-import {
-  buildLogFilename,
-  defaultImageName,
-  printFileDisplayStartup,
-} from "./run.js";
+import { buildLogFilename, printFileDisplayStartup } from "./run.js";
 import {
   Sandbox as SandboxTag,
   SandboxFactory,
   SANDBOX_WORKSPACE_DIR,
-  makeDockerSandboxLayer,
   makeSandboxLayerFromHandle,
   resolveGitVolumeMounts,
 } from "./SandboxFactory.js";
@@ -48,10 +36,8 @@ import { copyToSandbox } from "./CopyToSandbox.js";
 export interface CreateSandboxOptions {
   /** Explicit branch for the worktree (required). */
   readonly branch: string;
-  /** Sandbox provider (e.g. docker()). When omitted, defaults to Docker internally. */
-  readonly sandbox?: SandboxProvider;
-  /** Docker image name to use for the sandbox (default: sandcastle:<repo-dir-name>). */
-  readonly imageName?: string;
+  /** Sandbox provider (e.g. docker({ imageName: "sandcastle:myrepo" })). */
+  readonly sandbox: SandboxProvider;
   /** One-time setup hooks to run when the sandbox is first created. */
   readonly hooks?: {
     readonly onSandboxReady?: ReadonlyArray<{ command: string }>;
@@ -149,8 +135,7 @@ export const createSandbox = async (
     );
   }
 
-  // 3. Start container (Docker mode), provider mode, or local sandbox layer (test mode)
-  let containerName: string | undefined;
+  // 3. Start sandbox via provider or local sandbox layer (test mode)
   let providerHandle: BindMountSandboxHandle | undefined;
   let sandboxLayer: Layer.Layer<SandboxTag>;
   let sandboxRepoDir: string;
@@ -158,7 +143,7 @@ export const createSandbox = async (
   if (isTestMode) {
     sandboxLayer = options._test!.buildSandboxLayer!(worktreePath);
     sandboxRepoDir = worktreePath;
-  } else if (options.sandbox) {
+  } else {
     // Provider mode: delegate to the sandbox provider
     const env = await Effect.runPromise(
       resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
@@ -188,52 +173,6 @@ export const createSandbox = async (
 
     sandboxLayer = makeSandboxLayerFromHandle(providerHandle);
     sandboxRepoDir = providerHandle.workspacePath;
-  } else {
-    containerName = `sandcastle-${randomUUID()}`;
-    const resolvedImageName =
-      options.imageName ?? defaultImageName(hostRepoDir);
-
-    const env = await Effect.runPromise(
-      resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
-    );
-
-    const gitPath = join(hostRepoDir, ".git");
-    const gitMounts = await Effect.runPromise(
-      resolveGitVolumeMounts(gitPath).pipe(
-        Effect.provide(NodeFileSystem.layer),
-      ),
-    );
-    const volumeMounts = [
-      `${worktreePath}:${SANDBOX_WORKSPACE_DIR}`,
-      ...gitMounts,
-    ];
-
-    const hostUid = process.getuid?.() ?? 1000;
-    const hostGid = process.getgid?.() ?? 1000;
-
-    await Effect.runPromise(
-      startContainer(
-        containerName,
-        resolvedImageName,
-        { ...env, HOME: "/home/agent" },
-        {
-          volumeMounts,
-          workdir: SANDBOX_WORKSPACE_DIR,
-          user: `${hostUid}:${hostGid}`,
-        },
-      ).pipe(
-        Effect.andThen(
-          chownInContainer(
-            containerName,
-            `${hostUid}:${hostGid}`,
-            "/home/agent",
-          ),
-        ),
-      ),
-    );
-
-    sandboxLayer = makeDockerSandboxLayer(containerName);
-    sandboxRepoDir = SANDBOX_WORKSPACE_DIR;
   }
 
   // 4. Run onSandboxReady hooks
@@ -255,13 +194,6 @@ export const createSandbox = async (
   let closed = false;
 
   const forceCleanup = () => {
-    if (containerName) {
-      try {
-        execFileSync("docker", ["rm", "-f", containerName], {
-          stdio: "ignore",
-        });
-      } catch {}
-    }
     console.error(`\nWorktree preserved at ${worktreePath}`);
     console.error(`  To review: cd ${worktreePath}`);
     console.error(`  To clean up: git worktree remove --force ${worktreePath}`);
@@ -280,13 +212,9 @@ export const createSandbox = async (
     if (closed) return { preservedWorktreePath: undefined };
     closed = true;
 
-    // Remove container / close provider handle
+    // Close provider handle
     if (providerHandle) {
       await providerHandle.close();
-    } else if (containerName) {
-      await Effect.runPromise(
-        removeContainer(containerName).pipe(Effect.orDie),
-      );
     }
 
     // Check for uncommitted changes

@@ -5,14 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentError, TimeoutError, WorktreeError } from "./errors.js";
-import { Display, SilentDisplay, type DisplayEntry } from "./Display.js";
-
-// Mock child_process before importing modules under test
-vi.mock("node:child_process", () => ({
-  execFile: vi.fn(),
-  execFileSync: vi.fn(),
-  spawn: vi.fn(),
-}));
+import { SilentDisplay, type DisplayEntry } from "./Display.js";
+import {
+  createBindMountSandboxProvider,
+  type SandboxProvider,
+  type BindMountSandboxHandle,
+} from "./SandboxProvider.js";
 
 vi.mock("./WorktreeManager.js", () => ({
   create: vi.fn(),
@@ -21,7 +19,6 @@ vi.mock("./WorktreeManager.js", () => ({
   hasUncommittedChanges: vi.fn(),
 }));
 
-import { execFile } from "node:child_process";
 import * as WorktreeManager from "./WorktreeManager.js";
 import {
   SandboxFactory,
@@ -30,7 +27,6 @@ import {
   SANDBOX_WORKSPACE_DIR,
 } from "./SandboxFactory.js";
 
-const mockExecFile = vi.mocked(execFile);
 const mockCreate = vi.mocked(WorktreeManager.create);
 const mockRemove = vi.mocked(WorktreeManager.remove);
 const mockPruneStale = vi.mocked(WorktreeManager.pruneStale);
@@ -38,17 +34,37 @@ const mockHasUncommittedChanges = vi.mocked(
   WorktreeManager.hasUncommittedChanges,
 );
 
-/** Make all execFile calls succeed with given stdout. */
-const mockDockerSuccess = (stdout = "") => {
-  mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
-    (callback as Function)(null, stdout, "");
-    return {} as any;
+/** Create a mock sandbox provider that records calls and delegates to a no-op handle. */
+const makeMockProvider = (): {
+  provider: SandboxProvider;
+  createCalls: any[];
+  closeCalls: number;
+} => {
+  const createCalls: any[] = [];
+  let closeCalls = 0;
+  const provider = createBindMountSandboxProvider({
+    name: "test-provider",
+    create: async (options) => {
+      createCalls.push(options);
+      const handle: BindMountSandboxHandle = {
+        workspacePath: SANDBOX_WORKSPACE_DIR,
+        exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+        execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+        close: async () => {
+          closeCalls++;
+        },
+      };
+      return handle;
+    },
   });
+  return {
+    provider,
+    createCalls,
+    get closeCalls() {
+      return closeCalls;
+    },
+  };
 };
-
-/** Collect all docker arg arrays across calls. */
-const capturedArgs = (): string[][] =>
-  mockExecFile.mock.calls.map((call) => call[1] as string[]);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -66,6 +82,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     return dir;
   };
 
+  let mockProvider: ReturnType<typeof makeMockProvider>;
+
   const makeLayer = (
     displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
   ) =>
@@ -73,9 +91,9 @@ describe("WorktreeDockerSandboxFactory", () => {
       WorktreeDockerSandboxFactory.layer,
       Layer.mergeAll(
         Layer.succeed(WorktreeSandboxConfig, {
-          imageName: "test-image",
           env: { FOO: "bar" },
           hostRepoDir,
+          sandboxProvider: mockProvider.provider,
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(displayRef),
@@ -84,6 +102,7 @@ describe("WorktreeDockerSandboxFactory", () => {
 
   beforeEach(async () => {
     hostRepoDir = await makeTempRepo();
+    mockProvider = makeMockProvider();
     mockCreate.mockReturnValue(
       Effect.succeed({
         path: worktreePath,
@@ -94,7 +113,6 @@ describe("WorktreeDockerSandboxFactory", () => {
     mockPruneStale.mockReturnValue(Effect.void);
     // Default: clean worktree (no uncommitted changes)
     mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
-    mockDockerSuccess();
   });
 
   afterEach(async () => {
@@ -109,10 +127,10 @@ describe("WorktreeDockerSandboxFactory", () => {
       WorktreeDockerSandboxFactory.layer,
       Layer.mergeAll(
         Layer.succeed(WorktreeSandboxConfig, {
-          imageName: "test-image",
           env: {},
           hostRepoDir,
           worktree: { mode: "branch", branch: "feature/my-branch" },
+          sandboxProvider: mockProvider.provider,
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
@@ -144,7 +162,47 @@ describe("WorktreeDockerSandboxFactory", () => {
     });
   });
 
-  it("creates a worktree before starting the container", async () => {
+  it("creates a worktree before calling the provider", async () => {
+    const callOrder: string[] = [];
+    mockCreate.mockImplementation(() =>
+      Effect.sync(() => {
+        callOrder.push("worktree-create");
+        return { path: worktreePath, branch: "sandcastle/20240101-000000" };
+      }),
+    );
+    const { provider } = makeMockProvider();
+    const origCreate = provider.create;
+    (provider as any).create = async (opts: any) => {
+      callOrder.push("provider-create");
+      return origCreate(opts);
+    };
+
+    const layer = Layer.provide(
+      WorktreeDockerSandboxFactory.layer,
+      Layer.mergeAll(
+        Layer.succeed(WorktreeSandboxConfig, {
+          env: { FOO: "bar" },
+          hostRepoDir,
+          sandboxProvider: provider,
+        }),
+        NodeFileSystem.layer,
+        SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(callOrder.indexOf("worktree-create")).toBeLessThan(
+      callOrder.indexOf("provider-create"),
+    );
+  });
+
+  it("passes worktree path and git mounts to provider.create", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
@@ -152,45 +210,18 @@ describe("WorktreeDockerSandboxFactory", () => {
       }).pipe(Effect.provide(makeLayer())),
     );
 
-    expect(mockCreate).toHaveBeenCalledWith(hostRepoDir, {
-      name: undefined,
+    expect(mockProvider.createCalls).toHaveLength(1);
+    const opts = mockProvider.createCalls[0];
+    // Should include worktree mount
+    expect(opts.mounts).toContainEqual({
+      hostPath: worktreePath,
+      sandboxPath: SANDBOX_WORKSPACE_DIR,
     });
-    // Worktree creation happened before the docker run call
-    const runCallIndex = mockExecFile.mock.calls.findIndex(
-      (c) => (c[1] as string[])[0] === "run",
-    );
-    expect(runCallIndex).toBeGreaterThan(-1);
-    // create() was called (mocked promise), so it was invoked before docker run
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts container with worktree and .git bind-mounts at SANDBOX_WORKSPACE_DIR", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(() => Effect.void);
-      }).pipe(Effect.provide(makeLayer())),
-    );
-
-    const runArgs = capturedArgs().find((args) => args[0] === "run");
-    expect(runArgs).toBeDefined();
-    expect(runArgs).toContain(`${worktreePath}:${SANDBOX_WORKSPACE_DIR}`);
-    const gitMount = `${hostRepoDir}/.git:${hostRepoDir}/.git`;
-    expect(runArgs).toContain(gitMount);
-  });
-
-  it("sets working directory to SANDBOX_WORKSPACE_DIR", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(() => Effect.void);
-      }).pipe(Effect.provide(makeLayer())),
-    );
-
-    const runArgs = capturedArgs().find((args) => args[0] === "run");
-    expect(runArgs).toContain("-w");
-    const wIndex = runArgs!.indexOf("-w");
-    expect(runArgs![wIndex + 1]).toBe(SANDBOX_WORKSPACE_DIR);
+    // Should include git mount
+    expect(opts.mounts).toContainEqual({
+      hostPath: `${hostRepoDir}/.git`,
+      sandboxPath: `${hostRepoDir}/.git`,
+    });
   });
 
   it("removes worktree after the effect completes", async () => {
@@ -248,7 +279,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     });
   });
 
-  it("always sets HOME=/home/agent in the container environment", async () => {
+  it("closes provider handle on release", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
@@ -256,34 +287,7 @@ describe("WorktreeDockerSandboxFactory", () => {
       }).pipe(Effect.provide(makeLayer())),
     );
 
-    const runArgs = capturedArgs().find((args) => args[0] === "run");
-    expect(runArgs).toContain("HOME=/home/agent");
-  });
-
-  it("does not let user env override HOME", async () => {
-    const layerWithHome = Layer.provide(
-      WorktreeDockerSandboxFactory.layer,
-      Layer.mergeAll(
-        Layer.succeed(WorktreeSandboxConfig, {
-          imageName: "test-image",
-          env: { FOO: "bar", HOME: "/tmp/evil" },
-          hostRepoDir,
-        }),
-        NodeFileSystem.layer,
-        SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
-      ),
-    );
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(() => Effect.void);
-      }).pipe(Effect.provide(layerWithHome)),
-    );
-
-    const runArgs = capturedArgs().find((args) => args[0] === "run");
-    expect(runArgs).toContain("HOME=/home/agent");
-    expect(runArgs).not.toContain("HOME=/tmp/evil");
+    expect(mockProvider.closeCalls).toBe(1);
   });
 
   it("preserves worktree (does not remove) when the effect fails with dirty worktree", async () => {
@@ -300,7 +304,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     expect(mockRemove).not.toHaveBeenCalled();
   });
 
-  it("removes container but preserves worktree on typed failure with dirty worktree", async () => {
+  it("closes provider handle but preserves worktree on typed failure with dirty worktree", async () => {
     mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     await expect(
       Effect.runPromise(
@@ -315,9 +319,8 @@ describe("WorktreeDockerSandboxFactory", () => {
 
     // Worktree must NOT be removed
     expect(mockRemove).not.toHaveBeenCalled();
-    // Container must be removed (docker stop + rm)
-    const allArgs = capturedArgs();
-    expect(allArgs.some((args) => args[0] === "rm")).toBe(true);
+    // Provider handle must be closed
+    expect(mockProvider.closeCalls).toBe(1);
   });
 
   it("attaches preservedWorktreePath to TimeoutError on failure with dirty worktree", async () => {
@@ -370,10 +373,10 @@ describe("WorktreeDockerSandboxFactory", () => {
       WorktreeDockerSandboxFactory.layer,
       Layer.mergeAll(
         Layer.succeed(WorktreeSandboxConfig, {
-          imageName: "test-image",
           env: {},
           hostRepoDir,
           copyToSandbox: ["node_modules"],
+          sandboxProvider: mockProvider.provider,
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(ref),
@@ -514,10 +517,10 @@ describe("WorktreeDockerSandboxFactory", () => {
         WorktreeDockerSandboxFactory.layer,
         Layer.mergeAll(
           Layer.succeed(WorktreeSandboxConfig, {
-            imageName: "test-image",
             env: { FOO: "bar" },
             hostRepoDir,
             worktree: { mode: "none" },
+            sandboxProvider: mockProvider.provider,
           }),
           NodeFileSystem.layer,
           SilentDisplay.layer(displayRef),
@@ -537,7 +540,7 @@ describe("WorktreeDockerSandboxFactory", () => {
       expect(mockPruneStale).not.toHaveBeenCalled();
     });
 
-    it("bind-mounts host repo dir at SANDBOX_WORKSPACE_DIR", async () => {
+    it("passes host repo dir and git mounts to provider", async () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const factory = yield* SandboxFactory;
@@ -545,11 +548,16 @@ describe("WorktreeDockerSandboxFactory", () => {
         }).pipe(Effect.provide(makeNoneLayer())),
       );
 
-      const runArgs = capturedArgs().find((args) => args[0] === "run");
-      expect(runArgs).toBeDefined();
-      expect(runArgs).toContain(`${hostRepoDir}:${SANDBOX_WORKSPACE_DIR}`);
-      const gitMount = `${hostRepoDir}/.git:${hostRepoDir}/.git`;
-      expect(runArgs).toContain(gitMount);
+      expect(mockProvider.createCalls).toHaveLength(1);
+      const opts = mockProvider.createCalls[0];
+      expect(opts.mounts).toContainEqual({
+        hostPath: hostRepoDir,
+        sandboxPath: SANDBOX_WORKSPACE_DIR,
+      });
+      expect(opts.mounts).toContainEqual({
+        hostPath: `${hostRepoDir}/.git`,
+        sandboxPath: `${hostRepoDir}/.git`,
+      });
     });
 
     it("returns undefined preservedWorktreePath", async () => {
@@ -577,53 +585,6 @@ describe("WorktreeDockerSandboxFactory", () => {
       );
 
       expect(receivedInfo?.hostWorktreePath).toBeUndefined();
-    });
-
-    it("mounts only one git volume when .git is a directory (normal repo)", async () => {
-      // hostRepoDir already has .git as a directory from makeTempRepo()
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const factory = yield* SandboxFactory;
-          yield* factory.withSandbox(() => Effect.void);
-        }).pipe(Effect.provide(makeNoneLayer())),
-      );
-
-      const runArgs = capturedArgs().find((args) => args[0] === "run");
-      expect(runArgs).toBeDefined();
-      // Should have exactly one git-related -v mount (the .git directory)
-      const gitMounts = runArgs!.filter((arg) => arg.includes(".git:"));
-      expect(gitMounts).toHaveLength(1);
-      expect(gitMounts[0]).toBe(`${hostRepoDir}/.git:${hostRepoDir}/.git`);
-    });
-
-    it("mounts both .git file and parent .git dir when .git is a worktree file", async () => {
-      // Create a parent repo with .git/worktrees/<name> structure
-      const parentRepoDir = await makeTempRepo();
-      const parentGitDir = join(parentRepoDir, ".git");
-      await mkdir(join(parentGitDir, "worktrees", "my-worktree"), {
-        recursive: true,
-      });
-
-      // Replace .git directory with a worktree file pointing to the parent
-      await rm(join(hostRepoDir, ".git"), { recursive: true });
-      await writeFile(
-        join(hostRepoDir, ".git"),
-        `gitdir: ${parentGitDir}/worktrees/my-worktree\n`,
-      );
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const factory = yield* SandboxFactory;
-          yield* factory.withSandbox(() => Effect.void);
-        }).pipe(Effect.provide(makeNoneLayer())),
-      );
-
-      const runArgs = capturedArgs().find((args) => args[0] === "run");
-      expect(runArgs).toBeDefined();
-      const gitMounts = runArgs!.filter((arg) => arg.includes(".git"));
-      // Should mount both the .git file and the parent .git directory
-      expect(gitMounts).toContain(`${hostRepoDir}/.git:${hostRepoDir}/.git`);
-      expect(gitMounts).toContain(`${parentGitDir}:${parentGitDir}`);
     });
   });
 

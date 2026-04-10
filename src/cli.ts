@@ -33,6 +33,7 @@ import {
 } from "./SandboxFactory.js";
 import { withSandboxLifecycle } from "./SandboxLifecycle.js";
 import { resolveEnv } from "./EnvResolver.js";
+import { docker } from "./sandboxes/docker.js";
 
 // --- Shared options ---
 
@@ -447,9 +448,9 @@ const interactiveCommand = Command.make(
         WorktreeDockerSandboxFactory.layer,
         Layer.merge(
           Layer.succeed(WorktreeSandboxConfig, {
-            imageName,
             env,
             hostRepoDir,
+            sandboxProvider: docker({ imageName }),
           }),
           NodeFileSystem.layer,
         ),

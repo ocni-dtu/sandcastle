@@ -17,6 +17,7 @@
 //   "scripts": { "sandcastle": "npx tsx .sandcastle/main.mts" }
 
 import * as sandcastle from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -57,6 +58,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   const implement = await sandcastle.run({
     hooks,
     copyToSandbox,
+    sandbox: docker(),
     name: "implementer",
     maxIterations: 100,
     agent: sandcastle.claudeCode("claude-sonnet-4-6"),
@@ -84,6 +86,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   await sandcastle.run({
     hooks,
     copyToSandbox,
+    sandbox: docker(),
     name: "reviewer",
     maxIterations: 10,
     agent: sandcastle.claudeCode("claude-sonnet-4-6"),

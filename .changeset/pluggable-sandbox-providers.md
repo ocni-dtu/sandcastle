@@ -2,4 +2,4 @@
 "@ai-hero/sandcastle": patch
 ---
 
-Add pluggable sandbox provider abstraction with bind-mount provider types, `createBindMountSandboxProvider` factory, and `docker()` factory function. `run()` and `createSandbox()` now accept an optional `sandbox` option, defaulting to Docker internally.
+**BREAKING:** Make `sandbox` a required option on `run()` and `createSandbox()`. Remove `imageName` from top-level `RunOptions` and `CreateSandboxOptions` — image configuration now lives inside the sandbox provider (e.g. `docker({ imageName })`). The `docker()` factory is exported exclusively from `@ai-hero/sandcastle/sandboxes/docker`.

@@ -9,7 +9,19 @@ import { describe, expect, it } from "vitest";
 import { claudeCode, pi } from "./AgentProvider.js";
 import { createSandbox } from "./createSandbox.js";
 import { Sandbox } from "./SandboxFactory.js";
+import { createBindMountSandboxProvider } from "./SandboxProvider.js";
 import { makeLocalSandboxLayer } from "./testSandbox.js";
+
+/** Dummy sandbox provider used to satisfy the required `sandbox` field in test mode. */
+const testSandbox = createBindMountSandboxProvider({
+  name: "test",
+  create: async () => ({
+    workspacePath: "/home/agent/workspace",
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    close: async () => {},
+  }),
+});
 
 const execAsync = promisify(exec);
 
@@ -129,6 +141,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-branch",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -152,6 +165,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-run-branch",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) =>
@@ -182,6 +196,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-clean-close",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -203,6 +218,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-dirty-close",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -232,6 +248,7 @@ describe("createSandbox", () => {
     {
       await using sandbox = await createSandbox({
         branch: "test-dispose-branch",
+        sandbox: testSandbox,
         _test: {
           hostRepoDir: hostDir,
           buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -252,6 +269,7 @@ describe("createSandbox", () => {
 
     const sandbox1 = await createSandbox({
       branch: "collision-branch",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -262,6 +280,7 @@ describe("createSandbox", () => {
       await expect(
         createSandbox({
           branch: "collision-branch",
+          sandbox: testSandbox,
           _test: {
             hostRepoDir: hostDir,
             buildSandboxLayer: (sandboxDir) =>
@@ -282,6 +301,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-commits-branch",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) =>
@@ -315,6 +335,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-idempotent-close",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) => makeLocalSandboxLayer(sandboxDir),
@@ -336,6 +357,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-multi-run",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) =>
@@ -374,6 +396,7 @@ describe("createSandbox", () => {
     let runCount = 0;
     const sandbox = await createSandbox({
       branch: "test-commit-accumulation",
+      sandbox: testSandbox,
       _test: {
         hostRepoDir: hostDir,
         buildSandboxLayer: (sandboxDir) =>
@@ -426,6 +449,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-hooks",
+      sandbox: testSandbox,
       hooks: {
         onSandboxReady: [
           { command: "touch /tmp/hook-marker.txt" },
@@ -461,6 +485,7 @@ describe("createSandbox", () => {
 
     const sandbox = await createSandbox({
       branch: "test-copy",
+      sandbox: testSandbox,
       copyToSandbox: ["config.json"],
       _test: {
         hostRepoDir: hostDir,

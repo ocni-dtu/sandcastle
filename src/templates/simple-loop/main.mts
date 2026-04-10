@@ -1,4 +1,5 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // Simple loop: an agent that picks open GitHub issues one by one and closes them.
 // Run this with: npx tsx .sandcastle/main.mts
@@ -7,6 +8,9 @@ import { run, claudeCode } from "@ai-hero/sandcastle";
 await run({
   // A name for this run, shown as a prefix in log output.
   name: "worker",
+
+  // Sandbox provider — Docker is the default runtime.
+  sandbox: docker(),
 
   // The agent provider. Pass a model string to claudeCode() — sonnet balances
   // capability and speed for most tasks. Switch to claude-opus-4-6 for harder

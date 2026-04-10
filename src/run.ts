@@ -91,7 +91,7 @@ export const buildLogFilename = (
 export interface RunSummaryRowsOptions {
   readonly name?: string;
   readonly agentName: string;
-  readonly imageName: string;
+  readonly sandboxName: string;
   readonly maxIterations: number;
   readonly branch: string;
 }
@@ -105,7 +105,7 @@ export const buildRunSummaryRows = (
   options: RunSummaryRowsOptions,
 ): Record<string, string> => ({
   Agent: options.name ?? options.agentName,
-  Image: options.imageName,
+  Sandbox: options.sandboxName,
   "Max iterations": String(options.maxIterations),
   Branch: options.branch,
 });
@@ -155,8 +155,8 @@ export type WorktreeMode =
 export interface RunOptions {
   /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")) */
   readonly agent: AgentProvider;
-  /** Sandbox provider (e.g. docker()). When omitted, defaults to Docker internally. */
-  readonly sandbox?: SandboxProvider;
+  /** Sandbox provider (e.g. docker({ imageName: "sandcastle:myrepo" })). */
+  readonly sandbox: SandboxProvider;
   /** Inline prompt string (mutually exclusive with promptFile) */
   readonly prompt?: string;
   /** Path to a prompt file (mutually exclusive with prompt) */
@@ -169,8 +169,6 @@ export interface RunOptions {
   };
   /** Worktree mode for sandbox work. Defaults to `{ mode: 'temp-branch' }` when omitted. */
   readonly worktree?: WorktreeMode;
-  /** Docker image name to use for the sandbox (default: sandcastle:<repo-dir-name>) */
-  readonly imageName?: string;
   /** Key-value map for {{KEY}} placeholder substitution in prompts */
   readonly promptArgs?: PromptArgs;
   /** Logging mode (default: { type: 'file' } with auto-generated path under .sandcastle/logs/) */
@@ -243,9 +241,6 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
 
   const agentName = provider.name;
 
-  // Resolve image name: explicit option > default
-  const resolvedImageName = options.imageName ?? defaultImageName(hostRepoDir);
-
   // Resolve env vars
   const env = await Effect.runPromise(
     resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
@@ -298,7 +293,6 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
     WorktreeDockerSandboxFactory.layer,
     Layer.mergeAll(
       Layer.succeed(WorktreeSandboxConfig, {
-        imageName: resolvedImageName,
         env,
         hostRepoDir,
         worktree: worktreeMode,
@@ -320,7 +314,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
       const rows = buildRunSummaryRows({
         name: options.name,
         agentName,
-        imageName: resolvedImageName,
+        sandboxName: options.sandbox.name,
         maxIterations,
         branch: resolvedBranch,
       });
