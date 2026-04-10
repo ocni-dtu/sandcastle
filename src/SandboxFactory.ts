@@ -17,7 +17,10 @@ import type {
   SandboxProvider,
   BindMountSandboxProvider,
   BindMountSandboxHandle,
+  IsolatedSandboxProvider,
+  IsolatedSandboxHandle,
 } from "./SandboxProvider.js";
+import { syncIn } from "./syncIn.js";
 
 export interface ExecResult {
   readonly stdout: string;
@@ -90,6 +93,49 @@ export const makeSandboxLayerFromHandle = (
           message: "copyOut is not supported for bind-mount sandbox providers",
         }),
       ),
+  });
+
+/**
+ * Wrap a Promise-based IsolatedSandboxHandle into an Effect-based SandboxService layer.
+ */
+export const makeSandboxLayerFromIsolatedHandle = (
+  handle: IsolatedSandboxHandle,
+): Layer.Layer<Sandbox> =>
+  Layer.succeed(Sandbox, {
+    exec: (command, options) =>
+      Effect.tryPromise({
+        try: () => handle.exec(command, options),
+        catch: (e) =>
+          new ExecError({
+            command,
+            message: `exec failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
+    execStreaming: (command, onStdoutLine, options) =>
+      Effect.tryPromise({
+        try: () => handle.execStreaming(command, onStdoutLine, options),
+        catch: (e) =>
+          new ExecError({
+            command,
+            message: `exec streaming failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
+    copyIn: (hostPath, sandboxPath) =>
+      Effect.tryPromise({
+        try: () => handle.copyIn(hostPath, sandboxPath),
+        catch: (e) =>
+          new CopyError({
+            message: `copyIn failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
+    copyOut: (sandboxPath, hostPath) =>
+      Effect.tryPromise({
+        try: () => handle.copyOut(sandboxPath, hostPath),
+        catch: (e) =>
+          new CopyError({
+            message: `copyOut failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
   });
 
 /** The mount point inside the container where the project worktree is bound. */
@@ -230,6 +276,40 @@ const startProviderSandbox = (
     })),
   );
 
+/**
+ * Start an isolated sandbox: create handle, sync host repo via git bundle.
+ * Returns the handle, sandbox layer, and workspace path.
+ */
+const startIsolatedProviderSandbox = (
+  provider: IsolatedSandboxProvider,
+  hostRepoDir: string,
+  env: Record<string, string>,
+): Effect.Effect<
+  {
+    handle: IsolatedSandboxHandle;
+    sandboxLayer: Layer.Layer<Sandbox>;
+    workspacePath: string;
+  },
+  DockerError | WorktreeError
+> =>
+  Effect.tryPromise({
+    try: async () => {
+      const handle = await provider.create({ env });
+      await syncIn(hostRepoDir, handle);
+      return handle;
+    },
+    catch: (e) =>
+      new WorktreeError({
+        message: `Isolated provider '${provider.name}' setup failed: ${e instanceof Error ? e.message : String(e)}`,
+      }),
+  }).pipe(
+    Effect.map((handle) => ({
+      handle,
+      sandboxLayer: makeSandboxLayerFromIsolatedHandle(handle),
+      workspacePath: handle.workspacePath,
+    })),
+  );
+
 /** Shared acquire result type for the worktree-mode acquireUseRelease. */
 interface AcquireResult {
   worktreeInfo: WorktreeManager.WorktreeInfo;
@@ -262,6 +342,29 @@ export const WorktreeDockerSandboxFactory = {
           E | DockerError | WorktreeError,
           Exclude<R, Sandbox>
         > => {
+          // Isolated providers: skip worktree, sync via git bundle
+          if (sandboxProvider.tag === "isolated") {
+            return Effect.acquireUseRelease(
+              startIsolatedProviderSandbox(sandboxProvider, hostRepoDir, env),
+              // Use
+              ({ sandboxLayer }) =>
+                makeEffect({}).pipe(
+                  Effect.provide(sandboxLayer),
+                ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
+              // Release
+              ({ handle }) =>
+                Effect.tryPromise({
+                  try: () => handle.close(),
+                  catch: () => undefined,
+                }).pipe(Effect.orDie),
+            ).pipe(
+              Effect.map((value) => ({
+                value,
+                preservedWorktreePath: undefined,
+              })),
+            );
+          }
+
           if (isNoneMode) {
             // None mode: bind-mount host directory directly, no worktree
             const gitPath = join(hostRepoDir, ".git");
@@ -273,15 +376,8 @@ export const WorktreeDockerSandboxFactory = {
                     message: `Failed to resolve git mounts: ${e}`,
                   }) as E | DockerError | WorktreeError,
               ),
-              Effect.flatMap((gitMounts) => {
-                if (sandboxProvider.tag !== "bind-mount") {
-                  return Effect.fail(
-                    new WorktreeError({
-                      message: `Sandbox provider '${sandboxProvider.name}' is not a bind-mount provider; worktree mode requires a bind-mount provider.`,
-                    }) as E | DockerError | WorktreeError,
-                  );
-                }
-                return Effect.acquireUseRelease(
+              Effect.flatMap((gitMounts) =>
+                Effect.acquireUseRelease(
                   startProviderSandbox(
                     sandboxProvider,
                     hostRepoDir,
@@ -306,8 +402,8 @@ export const WorktreeDockerSandboxFactory = {
                     value,
                     preservedWorktreePath: undefined,
                   })),
-                );
-              }),
+                ),
+              ),
             );
           }
 
@@ -370,16 +466,11 @@ export const WorktreeDockerSandboxFactory = {
                         AcquireResult,
                         DockerError | WorktreeError,
                         never
-                      > => {
-                        if (sandboxProvider.tag !== "bind-mount") {
-                          return Effect.fail(
-                            new WorktreeError({
-                              message: `Sandbox provider '${sandboxProvider.name}' is not a bind-mount provider; worktree mode requires a bind-mount provider.`,
-                            }),
-                          );
-                        }
-                        return startProviderSandbox(
-                          sandboxProvider,
+                      > =>
+                        // sandboxProvider is guaranteed bind-mount here
+                        // (isolated providers return early above)
+                        startProviderSandbox(
+                          sandboxProvider as BindMountSandboxProvider,
                           worktreeInfo.path,
                           hostRepoDir,
                           env,
@@ -391,8 +482,7 @@ export const WorktreeDockerSandboxFactory = {
                             handle,
                             sandboxLayer,
                           })),
-                        );
-                      },
+                        ),
                     ),
                   );
                 }),
