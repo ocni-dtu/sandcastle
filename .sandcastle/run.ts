@@ -12,9 +12,6 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     name: "Planner",
     agent: sandcastle.claudeCode("claude-opus-4-6"),
     promptFile: "./.sandcastle/plan-prompt.md",
-    worktree: {
-      mode: "none",
-    },
   });
 
   const planMatch = plan.stdout.match(/<plan>([\s\S]*?)<\/plan>/);
@@ -44,7 +41,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   const settled = await Promise.allSettled(
     issues.map(async (issue) => {
       await using sandbox = await sandcastle.createSandbox({
-        sandbox: docker(),
+        sandbox: docker({
+          branchStrategy: { type: "branch", branch: issue.branch },
+        }),
         branch: issue.branch,
         copyToSandbox: ["node_modules"],
         hooks: {
@@ -130,9 +129,6 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       ISSUES: completedIssues
         .map((i) => `- #${i.number}: ${i.title}`)
         .join("\n"),
-    },
-    worktree: {
-      mode: "none",
     },
   });
 
