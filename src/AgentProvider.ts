@@ -227,3 +227,28 @@ export const claudeCode = (
     return parseStreamJsonLine(line);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Junie agent provider
+// ---------------------------------------------------------------------------
+
+export interface JunieOptions {}
+
+export const junie = (
+  model: string,
+  _options?: JunieOptions,
+): AgentProvider => ({
+  name: "junie",
+
+  buildPrintCommand(prompt: string): string {
+    return `junie --print --model ${shellEscape(model)} -p ${shellEscape(prompt)}`;
+  },
+
+  buildInteractiveArgs(_prompt: string): string[] {
+    return ["junie", "--model", model];
+  },
+
+  parseStreamLine(line: string): ParsedStreamEvent[] {
+    return parseStreamJsonLine(line);
+  },
+});

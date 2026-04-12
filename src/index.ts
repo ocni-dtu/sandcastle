@@ -9,8 +9,12 @@ export type {
   CloseResult,
 } from "./createSandbox.js";
 export type { PromptArgs } from "./PromptArgumentSubstitution.js";
-export { claudeCode, codex, pi } from "./AgentProvider.js";
-export type { AgentProvider, ClaudeCodeOptions } from "./AgentProvider.js";
+export { claudeCode, codex, junie, pi } from "./AgentProvider.js";
+export type {
+  AgentProvider,
+  ClaudeCodeOptions,
+  JunieOptions,
+} from "./AgentProvider.js";
 export {
   createBindMountSandboxProvider,
   createIsolatedSandboxProvider,

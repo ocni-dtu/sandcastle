@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeCode, codex, pi } from "./AgentProvider.js";
+import { claudeCode, codex, junie, pi } from "./AgentProvider.js";
 
 describe("claudeCode factory", () => {
   it("returns a provider with name 'claude-code'", () => {
@@ -410,6 +410,105 @@ describe("codex factory", () => {
   it("bakes model into each provider instance independently", () => {
     const provider1 = codex("model-a");
     const provider2 = codex("model-b");
+    expect(provider1.buildPrintCommand("test")).toContain("model-a");
+    expect(provider2.buildPrintCommand("test")).toContain("model-b");
+    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// junie factory
+// ---------------------------------------------------------------------------
+
+describe("junie factory", () => {
+  it("returns a provider with name 'junie'", () => {
+    const provider = junie("gpt-4o");
+    expect(provider.name).toBe("junie");
+  });
+
+  it("does not expose envManifest or dockerfileTemplate", () => {
+    const provider = junie("gpt-4o");
+    expect(provider).not.toHaveProperty("envManifest");
+    expect(provider).not.toHaveProperty("dockerfileTemplate");
+  });
+
+  it("buildPrintCommand includes the model and --print flag", () => {
+    const provider = junie("gpt-4o");
+    const command = provider.buildPrintCommand("do something");
+    expect(command).toContain("gpt-4o");
+    expect(command).toContain("--print");
+    expect(command).toContain("-p");
+  });
+
+  it("buildPrintCommand shell-escapes the prompt", () => {
+    const provider = junie("gpt-4o");
+    const command = provider.buildPrintCommand("it's a test");
+    expect(command).toContain("'it'\\''s a test'");
+  });
+
+  it("buildPrintCommand shell-escapes the model", () => {
+    const provider = junie("gpt-4o");
+    const command = provider.buildPrintCommand("do something");
+    expect(command).toContain("--model 'gpt-4o'");
+  });
+
+  it("buildInteractiveArgs includes the binary and model", () => {
+    const provider = junie("gpt-4o");
+    const args = provider.buildInteractiveArgs("");
+    expect(args[0]).toBe("junie");
+    expect(args).toContain("gpt-4o");
+    expect(args).toContain("--model");
+  });
+
+  it("parseStreamLine extracts text from assistant message", () => {
+    const provider = junie("gpt-4o");
+    const line = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Hello world" }] },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "text", text: "Hello world" },
+    ]);
+  });
+
+  it("parseStreamLine extracts result from result message", () => {
+    const provider = junie("gpt-4o");
+    const line = JSON.stringify({
+      type: "result",
+      result: "Final answer <promise>COMPLETE</promise>",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      {
+        type: "result",
+        result: "Final answer <promise>COMPLETE</promise>",
+      },
+    ]);
+  });
+
+  it("parseStreamLine returns empty array for non-JSON lines", () => {
+    const provider = junie("gpt-4o");
+    expect(provider.parseStreamLine("not json")).toEqual([]);
+    expect(provider.parseStreamLine("")).toEqual([]);
+  });
+
+  it("parseStreamLine extracts tool_use block (Bash → command arg)", () => {
+    const provider = junie("gpt-4o");
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", name: "Bash", input: { command: "npm test" } },
+        ],
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "Bash", args: "npm test" },
+    ]);
+  });
+
+  it("bakes model into each provider instance independently", () => {
+    const provider1 = junie("model-a");
+    const provider2 = junie("model-b");
     expect(provider1.buildPrintCommand("test")).toContain("model-a");
     expect(provider2.buildPrintCommand("test")).toContain("model-b");
     expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
