@@ -16,13 +16,18 @@ export interface ExecResult {
 export interface BindMountSandboxHandle {
   /** Absolute path to the workspace inside the sandbox. */
   readonly workspacePath: string;
-  /** Execute a command inside the sandbox. */
-  exec(command: string, options?: { cwd?: string }): Promise<ExecResult>;
-  /** Execute a command, streaming stdout line-by-line. */
-  execStreaming(
+  /**
+   * Execute a command in the sandbox.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work. A buffered/batch
+   * implementation that only calls `onLine` after the process exits does NOT
+   * satisfy this contract.
+   */
+  exec(
     command: string,
-    onLine: (line: string) => void,
-    options?: { cwd?: string },
+    options?: { onLine?: (line: string) => void; cwd?: string },
   ): Promise<ExecResult>;
   /** Tear down the sandbox. */
   close(): Promise<void>;
@@ -60,13 +65,18 @@ export interface BindMountSandboxProviderConfig {
 export interface IsolatedSandboxHandle {
   /** Absolute path to the workspace inside the sandbox. */
   readonly workspacePath: string;
-  /** Execute a command inside the sandbox. */
-  exec(command: string, options?: { cwd?: string }): Promise<ExecResult>;
-  /** Execute a command, streaming stdout line-by-line. */
-  execStreaming(
+  /**
+   * Execute a command in the sandbox.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work. A buffered/batch
+   * implementation that only calls `onLine` after the process exits does NOT
+   * satisfy this contract.
+   */
+  exec(
     command: string,
-    onLine: (line: string) => void,
-    options?: { cwd?: string },
+    options?: { onLine?: (line: string) => void; cwd?: string },
   ): Promise<ExecResult>;
   /** Copy a file from the host into the sandbox. */
   copyIn(hostPath: string, sandboxPath: string): Promise<void>;

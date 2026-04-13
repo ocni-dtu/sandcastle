@@ -20,7 +20,7 @@ const testSandbox = createBindMountSandboxProvider({
   create: async () => ({
     workspacePath: "/home/agent/workspace",
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+
     close: async () => {},
   }),
 });
@@ -261,7 +261,7 @@ describe("branchStrategy on RunOptions", () => {
       create: async () => ({
         workspacePath: "/workspace",
         exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-        execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+
         copyIn: async () => {},
         copyOut: async () => {},
         close: async () => {},

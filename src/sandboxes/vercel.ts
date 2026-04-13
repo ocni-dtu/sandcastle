@@ -162,8 +162,57 @@ export const vercel = (options?: VercelOptions): IsolatedSandboxProvider =>
 
         exec: async (
           command: string,
-          opts?: { cwd?: string },
+          opts?: { onLine?: (line: string) => void; cwd?: string },
         ): Promise<ExecResult> => {
+          if (opts?.onLine) {
+            const onLine = opts.onLine;
+            const stdoutLines: string[] = [];
+            const stderrChunks: string[] = [];
+            let partial = "";
+
+            const stdoutWritable = new Writable({
+              write(chunk, _encoding, callback) {
+                const text = partial + chunk.toString();
+                const lines = text.split("\n");
+                partial = lines.pop() ?? "";
+                for (const line of lines) {
+                  stdoutLines.push(line);
+                  onLine(line);
+                }
+                callback();
+              },
+              final(callback) {
+                if (partial) {
+                  stdoutLines.push(partial);
+                  onLine(partial);
+                  partial = "";
+                }
+                callback();
+              },
+            });
+
+            const stderrWritable = new Writable({
+              write(chunk, _encoding, callback) {
+                stderrChunks.push(chunk.toString());
+                callback();
+              },
+            });
+
+            const result = await sandbox.runCommand({
+              cmd: "sh",
+              args: ["-c", command],
+              cwd: opts?.cwd ?? VERCEL_WORKSPACE_PATH,
+              stdout: stdoutWritable,
+              stderr: stderrWritable,
+            });
+
+            return {
+              stdout: stdoutLines.join("\n"),
+              stderr: stderrChunks.join(""),
+              exitCode: result.exitCode,
+            };
+          }
+
           const result = await sandbox.runCommand({
             cmd: "sh",
             args: ["-c", command],
@@ -176,58 +225,6 @@ export const vercel = (options?: VercelOptions): IsolatedSandboxProvider =>
           return {
             stdout,
             stderr,
-            exitCode: result.exitCode,
-          };
-        },
-
-        execStreaming: async (
-          command: string,
-          onLine: (line: string) => void,
-          opts?: { cwd?: string },
-        ): Promise<ExecResult> => {
-          const stdoutLines: string[] = [];
-          const stderrChunks: string[] = [];
-          let partial = "";
-
-          const stdoutWritable = new Writable({
-            write(chunk, _encoding, callback) {
-              const text = partial + chunk.toString();
-              const lines = text.split("\n");
-              partial = lines.pop() ?? "";
-              for (const line of lines) {
-                stdoutLines.push(line);
-                onLine(line);
-              }
-              callback();
-            },
-            final(callback) {
-              if (partial) {
-                stdoutLines.push(partial);
-                onLine(partial);
-                partial = "";
-              }
-              callback();
-            },
-          });
-
-          const stderrWritable = new Writable({
-            write(chunk, _encoding, callback) {
-              stderrChunks.push(chunk.toString());
-              callback();
-            },
-          });
-
-          const result = await sandbox.runCommand({
-            cmd: "sh",
-            args: ["-c", command],
-            cwd: opts?.cwd ?? VERCEL_WORKSPACE_PATH,
-            stdout: stdoutWritable,
-            stderr: stderrWritable,
-          });
-
-          return {
-            stdout: stdoutLines.join("\n"),
-            stderr: stderrChunks.join(""),
             exitCode: result.exitCode,
           };
         },

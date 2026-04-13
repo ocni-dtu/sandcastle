@@ -34,11 +34,6 @@ const makePathTranslatingSandbox = (
         ...options,
         cwd: translateCwd(options?.cwd),
       }),
-    execStreaming: (command, onStdoutLine, options) =>
-      baseSandbox.execStreaming(command, onStdoutLine, {
-        ...options,
-        cwd: translateCwd(options?.cwd),
-      }),
     copyIn: (hp, sp) => baseSandbox.copyIn(hp, sp),
     copyOut: (sp, hp) => baseSandbox.copyOut(sp, hp),
   };

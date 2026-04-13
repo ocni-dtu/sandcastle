@@ -123,12 +123,49 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
       const handle: BindMountSandboxHandle = {
         workspacePath,
 
-        exec: (command: string, opts?: { cwd?: string }): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const args = ["exec"];
-            if (opts?.cwd) args.push("-w", opts.cwd);
-            args.push(containerName, "sh", "-c", command);
+        exec: (
+          command: string,
+          opts?: { onLine?: (line: string) => void; cwd?: string },
+        ): Promise<ExecResult> => {
+          const args = ["exec"];
+          if (opts?.cwd) args.push("-w", opts.cwd);
+          args.push(containerName, "sh", "-c", command);
 
+          if (opts?.onLine) {
+            const onLine = opts.onLine;
+            return new Promise((resolve, reject) => {
+              const proc = spawn("docker", args, {
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+
+              const stdoutChunks: string[] = [];
+              const stderrChunks: string[] = [];
+
+              const rl = createInterface({ input: proc.stdout! });
+              rl.on("line", (line) => {
+                stdoutChunks.push(line);
+                onLine(line);
+              });
+
+              proc.stderr!.on("data", (chunk: Buffer) => {
+                stderrChunks.push(chunk.toString());
+              });
+
+              proc.on("error", (error) => {
+                reject(new Error(`docker exec failed: ${error.message}`));
+              });
+
+              proc.on("close", (code) => {
+                resolve({
+                  stdout: stdoutChunks.join("\n"),
+                  stderr: stderrChunks.join(""),
+                  exitCode: code ?? 0,
+                });
+              });
+            });
+          }
+
+          return new Promise((resolve, reject) => {
             execFile(
               "docker",
               args,
@@ -145,49 +182,8 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
                 }
               },
             );
-          }),
-
-        execStreaming: (
-          command: string,
-          onLine: (line: string) => void,
-          opts?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const args = ["exec"];
-            if (opts?.cwd) args.push("-w", opts.cwd);
-            args.push(containerName, "sh", "-c", command);
-
-            const proc = spawn("docker", args, {
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line);
-            });
-
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
-            });
-
-            proc.on("error", (error) => {
-              reject(
-                new Error(`docker exec streaming failed: ${error.message}`),
-              );
-            });
-
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          }),
+          });
+        },
 
         close: async (): Promise<void> => {
           process.removeListener("exit", onExit);

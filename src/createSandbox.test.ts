@@ -18,7 +18,6 @@ const testSandbox = createBindMountSandboxProvider({
   create: async () => ({
     workspacePath: "/home/agent/workspace",
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     close: async () => {},
   }),
 });
@@ -102,7 +101,20 @@ const makeMockAgentLayer = (
 
   return Layer.succeed(Sandbox, {
     exec: (command, options) => {
-      if (matchAgent(command)) {
+      const agent = matchAgent(command);
+      if (agent && options?.onLine) {
+        const onLine = options.onLine;
+        return Effect.gen(function* () {
+          const cwd = options?.cwd ?? sandboxDir;
+          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+          const streamOutput = agent.toStream(output);
+          for (const line of streamOutput.split("\n")) {
+            onLine(line);
+          }
+          return { stdout: streamOutput, stderr: "", exitCode: 0 };
+        });
+      }
+      if (agent) {
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -111,23 +123,6 @@ const makeMockAgentLayer = (
       }
       return Effect.flatMap(Sandbox, (real) =>
         real.exec(command, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
-    execStreaming: (command, onStdoutLine, options) => {
-      const agent = matchAgent(command);
-      if (agent) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = agent.toStream(output);
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
       ).pipe(Effect.provide(fsLayer));
     },
     copyIn: (hostPath, sandboxPath) =>
@@ -509,25 +504,20 @@ describe("createSandbox", () => {
           workspacePath: workDir,
           exec: async (cmd, execOpts) => {
             const cwd = execOpts?.cwd ?? workDir;
-            if (cmd.startsWith("claude ")) {
-              return { stdout: "mock", stderr: "", exitCode: 0 };
-            }
-            const result = await execAsync(cmd, { cwd, env: isolatedEnv });
-            return {
-              stdout: result.stdout,
-              stderr: result.stderr,
-              exitCode: 0,
-            };
-          },
-          execStreaming: async (cmd, onLine, execOpts) => {
-            const cwd = execOpts?.cwd ?? workDir;
-            if (cmd.startsWith("claude ")) {
+            if (cmd.startsWith("claude ") && execOpts?.onLine) {
+              const onLine = execOpts.onLine;
               const output = toStreamJson("mock output");
               for (const line of output.split("\n")) onLine(line);
               return { stdout: output, stderr: "", exitCode: 0 };
             }
+            if (cmd.startsWith("claude ")) {
+              return { stdout: "mock", stderr: "", exitCode: 0 };
+            }
             const result = await execAsync(cmd, { cwd, env: isolatedEnv });
-            for (const line of result.stdout.split("\n")) onLine(line);
+            if (execOpts?.onLine) {
+              for (const line of result.stdout.split("\n"))
+                execOpts.onLine(line);
+            }
             return {
               stdout: result.stdout,
               stderr: result.stderr,
@@ -592,22 +582,14 @@ describe("createSandbox", () => {
         workspacePath: opts.worktreePath,
         exec: async (cmd, execOpts) => {
           const cwd = execOpts?.cwd ?? opts.worktreePath;
-          if (cmd.startsWith("claude "))
-            return { stdout: "mock", stderr: "", exitCode: 0 };
-          const result = await execAsync(cmd, { cwd, env: isolatedEnv });
-          return {
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: 0,
-          };
-        },
-        execStreaming: async (cmd, onLine, execOpts) => {
-          const cwd = execOpts?.cwd ?? opts.worktreePath;
-          if (cmd.startsWith("claude ")) {
+          if (cmd.startsWith("claude ") && execOpts?.onLine) {
+            const onLine = execOpts.onLine;
             const output = toStreamJson("mock");
             for (const line of output.split("\n")) onLine(line);
             return { stdout: output, stderr: "", exitCode: 0 };
           }
+          if (cmd.startsWith("claude "))
+            return { stdout: "mock", stderr: "", exitCode: 0 };
           const result = await execAsync(cmd, { cwd, env: isolatedEnv });
           return {
             stdout: result.stdout,

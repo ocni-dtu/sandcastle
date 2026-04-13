@@ -65,21 +65,23 @@ const invokeAgent = (
     resetIdleTimer();
 
     const execEffect = Effect.gen(function* () {
-      const execResult = yield* sandbox.execStreaming(
+      const execResult = yield* sandbox.exec(
         provider.buildPrintCommand(prompt),
-        (line) => {
-          resetIdleTimer();
-          for (const parsed of provider.parseStreamLine(line)) {
-            if (parsed.type === "text") {
-              onText(parsed.text);
-            } else if (parsed.type === "result") {
-              resultText = parsed.result;
-            } else if (parsed.type === "tool_call") {
-              onToolCall(parsed.name, parsed.args);
+        {
+          onLine: (line) => {
+            resetIdleTimer();
+            for (const parsed of provider.parseStreamLine(line)) {
+              if (parsed.type === "text") {
+                onText(parsed.text);
+              } else if (parsed.type === "result") {
+                resultText = parsed.result;
+              } else if (parsed.type === "tool_call") {
+                onToolCall(parsed.name, parsed.args);
+              }
             }
-          }
+          },
+          cwd: sandboxRepoDir,
         },
-        { cwd: sandboxRepoDir },
       );
 
       if (execResult.exitCode !== 0) {

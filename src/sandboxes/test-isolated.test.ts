@@ -112,14 +112,14 @@ describe("testIsolated()", () => {
     expect(existsSync(workspacePath)).toBe(false);
   });
 
-  it("execStreaming streams lines to callback", async () => {
+  it("exec streams lines to onLine callback", async () => {
     const provider = testIsolated();
     const handle = await provider.create({ env: {} });
     try {
       const lines: string[] = [];
-      const result = await handle.execStreaming(
+      const result = await handle.exec(
         'echo "line1"; echo "line2"; echo "line3"',
-        (line) => lines.push(line),
+        { onLine: (line) => lines.push(line) },
       );
 
       expect(lines).toEqual(["line1", "line2", "line3"]);

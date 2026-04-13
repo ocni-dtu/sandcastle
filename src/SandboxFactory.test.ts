@@ -54,7 +54,6 @@ const makeMockProvider = (): {
       const handle: BindMountSandboxHandle = {
         workspacePath: SANDBOX_WORKSPACE_DIR,
         exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-        execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
         close: async () => {
           closeCalls++;
         },

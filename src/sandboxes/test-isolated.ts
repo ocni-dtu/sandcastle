@@ -38,9 +38,44 @@ export const testIsolated = (): IsolatedSandboxProvider =>
 
         exec: (
           command: string,
-          options?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
+          options?: { onLine?: (line: string) => void; cwd?: string },
+        ): Promise<ExecResult> => {
+          if (options?.onLine) {
+            const onLine = options.onLine;
+            return new Promise((resolve, reject) => {
+              const proc = spawn("sh", ["-c", command], {
+                cwd: options?.cwd ?? workspacePath,
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+
+              const stdoutChunks: string[] = [];
+              const stderrChunks: string[] = [];
+
+              const rl = createInterface({ input: proc.stdout! });
+              rl.on("line", (line) => {
+                stdoutChunks.push(line);
+                onLine(line);
+              });
+
+              proc.stderr!.on("data", (chunk: Buffer) => {
+                stderrChunks.push(chunk.toString());
+              });
+
+              proc.on("error", (error) => {
+                reject(new Error(`exec failed: ${error.message}`));
+              });
+
+              proc.on("close", (code) => {
+                resolve({
+                  stdout: stdoutChunks.join("\n"),
+                  stderr: stderrChunks.join(""),
+                  exitCode: code ?? 0,
+                });
+              });
+            });
+          }
+
+          return new Promise((resolve, reject) => {
             execFile(
               "sh",
               ["-c", command],
@@ -60,44 +95,8 @@ export const testIsolated = (): IsolatedSandboxProvider =>
                 }
               },
             );
-          }),
-
-        execStreaming: (
-          command: string,
-          onLine: (line: string) => void,
-          options?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const proc = spawn("sh", ["-c", command], {
-              cwd: options?.cwd ?? workspacePath,
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line);
-            });
-
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
-            });
-
-            proc.on("error", (error) => {
-              reject(new Error(`exec streaming failed: ${error.message}`));
-            });
-
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          }),
+          });
+        },
 
         copyIn: async (
           hostPath: string,

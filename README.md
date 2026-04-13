@@ -515,18 +515,17 @@ Sandcastle ships with a Docker provider, but you can create your own. A sandbox 
 
 Both provider types return a **sandbox handle** from their `create()` function. The handle exposes:
 
-| Method          | Required | Description                                       |
-| --------------- | -------- | ------------------------------------------------- |
-| `exec`          | Both     | Run a command, return `ExecResult` when done      |
-| `execStreaming` | Both     | Run a command, call `onLine` for each stdout line |
-| `close`         | Both     | Tear down the sandbox                             |
-| `copyIn`        | Isolated | Copy a file from the host into the sandbox        |
-| `copyOut`       | Isolated | Copy a file from the sandbox to the host          |
-| `workspacePath` | Both     | Absolute path to the workspace inside the sandbox |
+| Method          | Required | Description                                                                  |
+| --------------- | -------- | ---------------------------------------------------------------------------- |
+| `exec`          | Both     | Run a command, optionally streaming stdout line-by-line via `options.onLine` |
+| `close`         | Both     | Tear down the sandbox                                                        |
+| `copyIn`        | Isolated | Copy a file from the host into the sandbox                                   |
+| `copyOut`       | Isolated | Copy a file from the sandbox to the host                                     |
+| `workspacePath` | Both     | Absolute path to the workspace inside the sandbox                            |
 
 ### `ExecResult`
 
-Every `exec` and `execStreaming` call returns an `ExecResult`:
+Every `exec` call returns an `ExecResult`:
 
 ```typescript
 interface ExecResult {
@@ -561,8 +560,43 @@ const localProcess = () =>
       return {
         workspacePath,
 
-        exec: (command: string, opts?: { cwd?: string }): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
+        exec: (
+          command: string,
+          opts?: { onLine?: (line: string) => void; cwd?: string },
+        ): Promise<ExecResult> => {
+          if (opts?.onLine) {
+            const onLine = opts.onLine;
+            return new Promise((resolve, reject) => {
+              const proc = spawn("sh", ["-c", command], {
+                cwd: opts?.cwd ?? workspacePath,
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+
+              const stdoutChunks: string[] = [];
+              const stderrChunks: string[] = [];
+
+              const rl = createInterface({ input: proc.stdout! });
+              rl.on("line", (line) => {
+                stdoutChunks.push(line);
+                onLine(line); // forward each line to Sandcastle
+              });
+
+              proc.stderr!.on("data", (chunk: Buffer) => {
+                stderrChunks.push(chunk.toString());
+              });
+
+              proc.on("error", (err) => reject(err));
+              proc.on("close", (code) => {
+                resolve({
+                  stdout: stdoutChunks.join("\n"),
+                  stderr: stderrChunks.join(""),
+                  exitCode: code ?? 0,
+                });
+              });
+            });
+          }
+
+          return new Promise((resolve, reject) => {
             execFile(
               "sh",
               ["-c", command],
@@ -579,41 +613,8 @@ const localProcess = () =>
                 }
               },
             );
-          }),
-
-        execStreaming: (
-          command: string,
-          onLine: (line: string) => void,
-          opts?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const proc = spawn("sh", ["-c", command], {
-              cwd: opts?.cwd ?? workspacePath,
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line); // forward each line to Sandcastle
-            });
-
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
-            });
-
-            proc.on("error", (err) => reject(err));
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          }),
+          });
+        },
 
         close: async () => {
           // nothing to tear down for a local process
@@ -650,8 +651,43 @@ const tempDir = () =>
       return {
         workspacePath,
 
-        exec: (command: string, opts?: { cwd?: string }): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
+        exec: (
+          command: string,
+          opts?: { onLine?: (line: string) => void; cwd?: string },
+        ): Promise<ExecResult> => {
+          if (opts?.onLine) {
+            const onLine = opts.onLine;
+            return new Promise((resolve, reject) => {
+              const proc = spawn("sh", ["-c", command], {
+                cwd: opts?.cwd ?? workspacePath,
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+
+              const stdoutChunks: string[] = [];
+              const stderrChunks: string[] = [];
+
+              const rl = createInterface({ input: proc.stdout! });
+              rl.on("line", (line) => {
+                stdoutChunks.push(line);
+                onLine(line);
+              });
+
+              proc.stderr!.on("data", (chunk: Buffer) => {
+                stderrChunks.push(chunk.toString());
+              });
+
+              proc.on("error", (err) => reject(err));
+              proc.on("close", (code) => {
+                resolve({
+                  stdout: stdoutChunks.join("\n"),
+                  stderr: stderrChunks.join(""),
+                  exitCode: code ?? 0,
+                });
+              });
+            });
+          }
+
+          return new Promise((resolve, reject) => {
             execFile(
               "sh",
               ["-c", command],
@@ -668,41 +704,8 @@ const tempDir = () =>
                 }
               },
             );
-          }),
-
-        execStreaming: (
-          command: string,
-          onLine: (line: string) => void,
-          opts?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const proc = spawn("sh", ["-c", command], {
-              cwd: opts?.cwd ?? workspacePath,
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line);
-            });
-
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
-            });
-
-            proc.on("error", (err) => reject(err));
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          }),
+          });
+        },
 
         copyIn: async (hostPath: string, sandboxPath: string) => {
           await mkdir(dirname(sandboxPath), { recursive: true });

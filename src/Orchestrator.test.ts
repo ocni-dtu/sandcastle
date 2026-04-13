@@ -143,6 +143,19 @@ const makeMockAgentLayer = (
     exec: (command, options) => {
       // Intercept claude invocations
       if (command.startsWith("claude ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toStreamJson(output);
+            // Emit each line to the callback
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -152,25 +165,6 @@ const makeMockAgentLayer = (
       // Pass through to real filesystem sandbox
       return Effect.flatMap(Sandbox, (real) =>
         real.exec(command, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
-    execStreaming: (command, onStdoutLine, options) => {
-      // Intercept claude invocations
-      if (command.startsWith("claude ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toStreamJson(output);
-          // Emit each line to the callback
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      // Pass through to real filesystem sandbox
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
       ).pipe(Effect.provide(fsLayer));
     },
     copyIn: (hostPath, sandboxPath) =>
@@ -1024,12 +1018,9 @@ describe("Orchestrator tool call display integration", () => {
     const mockLayer = makeTestSandboxFactory(hostDir, (dir) => {
       const fsLayer = makeLocalSandboxLayer(dir);
       return Layer.succeed(Sandbox, {
-        exec: (command, options) =>
-          Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-            Effect.provide(fsLayer),
-          ),
-        execStreaming: (command, onStdoutLine, options) => {
-          if (command.startsWith("claude ")) {
+        exec: (command, options) => {
+          if (command.startsWith("claude ") && options?.onLine) {
+            const onLine = options.onLine;
             const lines = [
               JSON.stringify({
                 type: "assistant",
@@ -1060,7 +1051,7 @@ describe("Orchestrator tool call display integration", () => {
                 result: "<promise>COMPLETE</promise>",
               }),
             ];
-            for (const line of lines) onStdoutLine(line);
+            for (const line of lines) onLine(line);
             return Effect.succeed({
               stdout: lines.join("\n"),
               stderr: "",
@@ -1068,7 +1059,7 @@ describe("Orchestrator tool call display integration", () => {
             });
           }
           return Effect.flatMap(Sandbox, (real) =>
-            real.execStreaming(command, onStdoutLine, options),
+            real.exec(command, options),
           ).pipe(Effect.provide(fsLayer));
         },
         copyIn: (hostPath, sandboxPath) =>
@@ -1128,12 +1119,8 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
               return Effect.succeed({
                 stdout: "",
                 stderr: "Agent crashed",
@@ -1141,7 +1128,7 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1183,18 +1170,15 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               // Only emit an assistant line, no result line
               const assistantLine = JSON.stringify({
                 type: "assistant",
                 message: { content: [{ type: "text", text: "working..." }] },
               });
-              onStdoutLine(assistantLine);
+              onLine(assistantLine);
               return Effect.succeed({
                 stdout: "All done. <promise>COMPLETE</promise>",
                 stderr: "",
@@ -1202,7 +1186,7 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1247,12 +1231,9 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               callCount++;
               if (callCount === 1) {
                 // Iteration 1: make a commit
@@ -1272,7 +1253,7 @@ describe("Orchestrator error handling", () => {
                   const output = "Finished iteration 1.";
                   const streamOutput = toStreamJson(output);
                   for (const line of streamOutput.split("\n")) {
-                    onStdoutLine(line);
+                    onLine(line);
                   }
                   return { stdout: streamOutput, stderr: "", exitCode: 0 };
                 });
@@ -1285,7 +1266,7 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1363,10 +1344,6 @@ describe("Orchestrator error handling", () => {
               real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
-          execStreaming: (command, onStdoutLine, options) =>
-            Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
-            ).pipe(Effect.provide(fsLayer)),
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
@@ -1408,17 +1385,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Test output";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1427,7 +1401,7 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1501,17 +1475,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1520,7 +1491,7 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1561,17 +1532,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1580,7 +1548,7 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1624,18 +1592,15 @@ describe("Orchestrator prompt preprocessing", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               // Capture the prompt passed to claude
               capturedPrompt = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1644,7 +1609,7 @@ describe("Orchestrator prompt preprocessing", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -1696,17 +1661,14 @@ describe("Orchestrator prompt preprocessing", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedPrompt = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1715,7 +1677,7 @@ describe("Orchestrator prompt preprocessing", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -2013,18 +1975,15 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Wait 100ms then emit a text event (resets idle timer)
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine(
+                onLine(
                   JSON.stringify({
                     type: "assistant",
                     message: {
@@ -2036,14 +1995,12 @@ describe("Orchestrator Display integration", () => {
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -2092,30 +2049,25 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Wait 100ms then emit a raw, unparsable line (should still reset idle timer)
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine("raw TUI output: rendering panel...");
+                onLine("raw TUI output: rendering panel...");
                 // Wait another 100ms then emit the result so the run completes
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -2161,25 +2113,20 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Stay idle for 250ms — enough for ~2 warnings at 100ms interval
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 250)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -2244,19 +2191,16 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Idle for 150ms — warning fires at ~100ms
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 150)),
                 );
                 // Emit text — should reset the warning counter
-                onStdoutLine(
+                onLine(
                   JSON.stringify({
                     type: "assistant",
                     message: {
@@ -2268,14 +2212,12 @@ describe("Orchestrator Display integration", () => {
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 150)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
@@ -2369,6 +2311,18 @@ const makeMockPiAgentLayer = (
   return Layer.succeed(Sandbox, {
     exec: (command, options) => {
       if (command.startsWith("pi ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toPiStreamJson(output);
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -2377,22 +2331,6 @@ const makeMockPiAgentLayer = (
       }
       return Effect.flatMap(Sandbox, (real) =>
         real.exec(command, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
-    execStreaming: (command, onStdoutLine, options) => {
-      if (command.startsWith("pi ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toPiStreamJson(output);
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
       ).pipe(Effect.provide(fsLayer));
     },
     copyIn: (hostPath, sandboxPath) =>
@@ -2517,21 +2455,18 @@ describe("Orchestrator with pi provider", () => {
 
     const fsLayer = makeLocalSandboxLayer(hostDir);
     const mockLayer = Layer.succeed(Sandbox, {
-      exec: (command, options) =>
-        Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-          Effect.provide(fsLayer),
-        ),
-      execStreaming: (command, onStdoutLine, options) => {
-        if (command.startsWith("pi ")) {
+      exec: (command, options) => {
+        if (command.startsWith("pi ") && options?.onLine) {
+          const onLine = options.onLine;
           return Effect.sync(() => {
             for (const line of streamLines) {
-              onStdoutLine(line);
+              onLine(line);
             }
             return { stdout: streamLines.join("\n"), stderr: "", exitCode: 0 };
           });
         }
         return Effect.flatMap(Sandbox, (real) =>
-          real.execStreaming(command, onStdoutLine, options),
+          real.exec(command, options),
         ).pipe(Effect.provide(fsLayer));
       },
       copyIn: (hostPath, sandboxPath) =>
@@ -2604,21 +2539,18 @@ describe("Orchestrator with pi provider", () => {
 
     const fsLayer = makeLocalSandboxLayer(hostDir);
     const mockLayer = Layer.succeed(Sandbox, {
-      exec: (command, options) =>
-        Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-          Effect.provide(fsLayer),
-        ),
-      execStreaming: (command, onStdoutLine, options) => {
-        if (command.startsWith("pi ")) {
+      exec: (command, options) => {
+        if (command.startsWith("pi ") && options?.onLine) {
+          const onLine = options.onLine;
           return Effect.sync(() => {
             for (const line of streamLines) {
-              onStdoutLine(line);
+              onLine(line);
             }
             return { stdout: streamLines.join("\n"), stderr: "", exitCode: 0 };
           });
         }
         return Effect.flatMap(Sandbox, (real) =>
-          real.execStreaming(command, onStdoutLine, options),
+          real.exec(command, options),
         ).pipe(Effect.provide(fsLayer));
       },
       copyIn: (hostPath, sandboxPath) =>
@@ -2694,6 +2626,18 @@ const makeMockCodexAgentLayer = (
   return Layer.succeed(Sandbox, {
     exec: (command, options) => {
       if (command.startsWith("codex ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toCodexStreamJson(output);
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -2702,22 +2646,6 @@ const makeMockCodexAgentLayer = (
       }
       return Effect.flatMap(Sandbox, (real) =>
         real.exec(command, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
-    execStreaming: (command, onStdoutLine, options) => {
-      if (command.startsWith("codex ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toCodexStreamJson(output);
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
       ).pipe(Effect.provide(fsLayer));
     },
     copyIn: (hostPath, sandboxPath) =>
