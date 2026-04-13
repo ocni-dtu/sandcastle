@@ -97,6 +97,8 @@ const result = await run({
     mounts: [
       { hostPath: "~/.npm", sandboxPath: "/home/agent/.npm", readonly: true },
     ],
+    // Optional: provider-level env vars merged at launch time
+    env: { DOCKER_SPECIFIC: "value" },
   }),
 
   // Branch strategy — controls how the agent's changes relate to branches.
@@ -474,8 +476,31 @@ agent: claudeCode("claude-opus-4-6", { effort: "high" });
 | Option   | Type                                         | Default | Description                                             |
 | -------- | -------------------------------------------- | ------- | ------------------------------------------------------- |
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"max"` | —       | Claude Code reasoning effort level (`max` is Opus only) |
+| `env`    | `Record<string, string>`                     | `{}`    | Environment variables injected by this agent provider   |
 
-Environment variables are resolved automatically from `.sandcastle/.env` and `process.env` — no need to pass them to the API. The required variables depend on the **agent provider** (see `sandcastle init` output for details).
+### Provider `env`
+
+Both **agent providers** and **sandbox providers** accept an optional `env: Record<string, string>` in their options. These environment variables are merged with the `.sandcastle/.env` resolver output at launch time:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-6", {
+    env: { ANTHROPIC_API_KEY: "sk-ant-..." },
+  }),
+  sandbox: docker({
+    env: { DOCKER_SPECIFIC_VAR: "value" },
+  }),
+  prompt: "Fix issue #42",
+});
+```
+
+**Merge rules:**
+
+- Provider env (agent + sandbox) overrides `.sandcastle/.env` resolver output for shared keys
+- Agent provider env and sandbox provider env **must not overlap** — if they share any key, `run()` throws an error
+- When `env` is not provided, it defaults to `{}`
+
+Environment variables are also resolved automatically from `.sandcastle/.env` and `process.env` — no need to pass them to the API. The required variables depend on the **agent provider** (see `sandcastle init` output for details).
 
 ## Custom Sandbox Providers
 

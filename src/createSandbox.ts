@@ -9,6 +9,7 @@ import {
   type DisplayEntry,
 } from "./Display.js";
 import { resolveEnv } from "./EnvResolver.js";
+import { mergeProviderEnv } from "./mergeProviderEnv.js";
 import { orchestrate } from "./Orchestrator.js";
 import {
   type PromptArgs,
@@ -144,9 +145,14 @@ export const createSandbox = async (
     sandboxRepoDir = worktreePath;
   } else {
     // Provider mode: delegate to the sandbox provider
-    const env = await Effect.runPromise(
+    const resolvedEnv = await Effect.runPromise(
       resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
     );
+    const env = mergeProviderEnv({
+      resolvedEnv,
+      agentProviderEnv: {},
+      sandboxProviderEnv: options.sandbox.env,
+    });
 
     const gitPath = join(hostRepoDir, ".git");
     const gitMounts = await Effect.runPromise(

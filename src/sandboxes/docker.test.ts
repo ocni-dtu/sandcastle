@@ -51,4 +51,15 @@ describe("docker()", () => {
     });
     expect(provider.tag).toBe("bind-mount");
   });
+
+  it("accepts an env option", () => {
+    const provider = docker({ env: { MY_VAR: "hello" } });
+    expect(provider.tag).toBe("bind-mount");
+    expect(provider.env).toEqual({ MY_VAR: "hello" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = docker();
+    expect(provider.env).toEqual({});
+  });
 });

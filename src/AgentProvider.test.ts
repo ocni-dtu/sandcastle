@@ -135,6 +135,18 @@ describe("claudeCode factory", () => {
       );
     }
   });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = claudeCode("claude-opus-4-6", {
+      env: { ANTHROPIC_API_KEY: "sk-test" },
+    });
+    expect(provider.env).toEqual({ ANTHROPIC_API_KEY: "sk-test" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    expect(provider.env).toEqual({});
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -280,6 +292,16 @@ describe("pi factory", () => {
     expect(provider2.buildPrintCommand("test")).toContain("model-b");
     expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
   });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = pi("claude-sonnet-4-6", { env: { PI_KEY: "abc" } });
+    expect(provider.env).toEqual({ PI_KEY: "abc" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = pi("claude-sonnet-4-6");
+    expect(provider.env).toEqual({});
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -413,5 +435,15 @@ describe("codex factory", () => {
     expect(provider1.buildPrintCommand("test")).toContain("model-a");
     expect(provider2.buildPrintCommand("test")).toContain("model-b");
     expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = codex("gpt-5.4-mini", { env: { OPENAI_KEY: "xyz" } });
+    expect(provider.env).toEqual({ OPENAI_KEY: "xyz" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = codex("gpt-5.4-mini");
+    expect(provider.env).toEqual({});
   });
 });

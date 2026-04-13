@@ -105,6 +105,9 @@ export interface VercelOptions {
    * Maps to the `runtime` option.
    */
   readonly template?: string;
+
+  /** Environment variables injected by this provider. Merged at launch time with env resolver and agent provider env. */
+  readonly env?: Record<string, string>;
 }
 
 /**
@@ -118,6 +121,7 @@ export interface VercelOptions {
 export const vercel = (options?: VercelOptions): IsolatedSandboxProvider =>
   createIsolatedSandboxProvider({
     name: "vercel",
+    env: options?.env,
     create: async (createOptions): Promise<IsolatedSandboxHandle> => {
       // Dynamic import so the peer dependency is only loaded at runtime
       const { Sandbox } = await import("@vercel/sandbox");

@@ -27,4 +27,15 @@ describe("vercel()", () => {
     });
     expect(provider.tag).toBe("isolated");
   });
+
+  it("accepts an env option", () => {
+    const provider = vercel({ env: { VERCEL_VAR: "value" } });
+    expect(provider.tag).toBe("isolated");
+    expect(provider.env).toEqual({ VERCEL_VAR: "value" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = vercel();
+    expect(provider.env).toEqual({});
+  });
 });

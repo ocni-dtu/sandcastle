@@ -11,7 +11,12 @@ export type {
 export type { PromptArgs } from "./PromptArgumentSubstitution.js";
 export type { MountConfig } from "./MountConfig.js";
 export { claudeCode, codex, pi } from "./AgentProvider.js";
-export type { AgentProvider, ClaudeCodeOptions } from "./AgentProvider.js";
+export type {
+  AgentProvider,
+  ClaudeCodeOptions,
+  PiOptions,
+  CodexOptions,
+} from "./AgentProvider.js";
 export {
   createBindMountSandboxProvider,
   createIsolatedSandboxProvider,

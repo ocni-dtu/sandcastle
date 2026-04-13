@@ -34,6 +34,8 @@ export interface DockerOptions {
    * If `hostPath` does not exist, sandbox creation fails with a clear error.
    */
   readonly mounts?: readonly MountConfig[];
+  /** Environment variables injected by this provider. Merged at launch time with env resolver and agent provider env. */
+  readonly env?: Record<string, string>;
 }
 
 /**
@@ -48,6 +50,7 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
 
   return createBindMountSandboxProvider({
     name: "docker",
+    env: options?.env,
     create: async (
       createOptions: BindMountCreateOptions,
     ): Promise<BindMountSandboxHandle> => {

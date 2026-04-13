@@ -48,6 +48,8 @@ export interface BindMountCreateOptions {
 export interface BindMountSandboxProviderConfig {
   /** Human-readable name for this provider (e.g. "docker", "podman"). */
   readonly name: string;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
   /** Create a sandbox handle from the given options. */
   readonly create: (
     options: BindMountCreateOptions,
@@ -84,6 +86,8 @@ export interface IsolatedCreateOptions {
 export interface IsolatedSandboxProviderConfig {
   /** Human-readable name for this provider (e.g. "daytona", "e2b"). */
   readonly name: string;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
   /** Create an isolated sandbox handle from the given options. */
   readonly create: (
     options: IsolatedCreateOptions,
@@ -96,6 +100,8 @@ export interface BindMountSandboxProvider {
   readonly tag: "bind-mount";
   /** Human-readable provider name. */
   readonly name: string;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
   /** @internal Create a sandbox handle. */
   readonly create: (
     options: BindMountCreateOptions,
@@ -108,6 +114,8 @@ export interface IsolatedSandboxProvider {
   readonly tag: "isolated";
   /** Human-readable provider name. */
   readonly name: string;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
   /** @internal Create an isolated sandbox handle. */
   readonly create: (
     options: IsolatedCreateOptions,
@@ -163,6 +171,7 @@ export const createBindMountSandboxProvider = (
 ): BindMountSandboxProvider => ({
   tag: "bind-mount",
   name: config.name,
+  env: config.env ?? {},
   create: config.create,
 });
 
@@ -175,5 +184,6 @@ export const createIsolatedSandboxProvider = (
 ): IsolatedSandboxProvider => ({
   tag: "isolated",
   name: config.name,
+  env: config.env ?? {},
   create: config.create,
 });

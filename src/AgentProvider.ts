@@ -64,6 +64,8 @@ const parseStreamJsonLine = (line: string): ParsedStreamEvent[] => {
 
 export interface AgentProvider {
   readonly name: string;
+  /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
+  readonly env?: Record<string, string>;
   buildPrintCommand(prompt: string): string;
   buildInteractiveArgs(prompt: string): string[];
   parseStreamLine(line: string): ParsedStreamEvent[];
@@ -128,8 +130,15 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
-export const pi = (model: string): AgentProvider => ({
+/** Options for the pi agent provider. */
+export interface PiOptions {
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
+
+export const pi = (model: string, options?: PiOptions): AgentProvider => ({
   name: "pi",
+  env: options?.env ?? {},
 
   buildPrintCommand(prompt: string): string {
     return `pi -p --mode json --no-session --model ${shellEscape(model)} ${shellEscape(prompt)}`;
@@ -182,8 +191,18 @@ const parseCodexStreamLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
-export const codex = (model: string): AgentProvider => ({
+/** Options for the codex agent provider. */
+export interface CodexOptions {
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
+
+export const codex = (
+  model: string,
+  options?: CodexOptions,
+): AgentProvider => ({
   name: "codex",
+  env: options?.env ?? {},
 
   buildPrintCommand(prompt: string): string {
     return `codex exec --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)} ${shellEscape(prompt)}`;
@@ -204,6 +223,8 @@ export const codex = (model: string): AgentProvider => ({
 
 export interface ClaudeCodeOptions {
   readonly effort?: "low" | "medium" | "high" | "max";
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
 }
 
 export const claudeCode = (
@@ -211,6 +232,7 @@ export const claudeCode = (
   options?: ClaudeCodeOptions,
 ): AgentProvider => ({
   name: "claude-code",
+  env: options?.env ?? {},
 
   buildPrintCommand(prompt: string): string {
     const effortFlag = options?.effort ? ` --effort ${options.effort}` : "";

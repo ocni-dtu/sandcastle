@@ -46,6 +46,9 @@ export interface DaytonaOptions {
   readonly create?:
     | CreateSandboxFromImageParams
     | CreateSandboxFromSnapshotParams;
+
+  /** Environment variables injected by this provider. Merged at launch time with env resolver and agent provider env. */
+  readonly env?: Record<string, string>;
 }
 
 /**
@@ -64,6 +67,7 @@ export interface DaytonaOptions {
 export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
   createIsolatedSandboxProvider({
     name: "daytona",
+    env: options?.env,
     create: async (): Promise<IsolatedSandboxHandle> => {
       const { Daytona } =
         (await import("@daytona/sdk")) as typeof import("@daytona/sdk");

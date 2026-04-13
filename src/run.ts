@@ -18,6 +18,7 @@ import {
 } from "./SandboxFactory.js";
 import type { SandboxProvider, BranchStrategy } from "./SandboxProvider.js";
 import { resolveEnv } from "./EnvResolver.js";
+import { mergeProviderEnv } from "./mergeProviderEnv.js";
 import { generateTempBranchName, getCurrentBranch } from "./WorktreeManager.js";
 import {
   type PromptArgs,
@@ -230,10 +231,15 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
 
   const agentName = provider.name;
 
-  // Resolve env vars
-  const env = await Effect.runPromise(
+  // Resolve env vars and merge with provider env
+  const resolvedEnv = await Effect.runPromise(
     resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
   );
+  const env = mergeProviderEnv({
+    resolvedEnv,
+    agentProviderEnv: provider.env ?? {},
+    sandboxProviderEnv: options.sandbox.env,
+  });
 
   // Always capture the host's current branch for the TARGET_BRANCH built-in
   // prompt argument. When using a temp branch, it also prefixes the log filename.

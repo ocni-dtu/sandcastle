@@ -48,6 +48,17 @@ describe("podman()", () => {
       }),
     ).toThrow("Mount hostPath does not exist");
   });
+
+  it("accepts an env option", () => {
+    const provider = podman({ env: { MY_VAR: "hello" } });
+    expect(provider.tag).toBe("bind-mount");
+    expect(provider.env).toEqual({ MY_VAR: "hello" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = podman();
+    expect(provider.env).toEqual({});
+  });
 });
 
 describe("defaultImageName()", () => {
