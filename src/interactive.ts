@@ -1,13 +1,11 @@
 import { NodeContext, NodeFileSystem } from "@effect/platform-node";
-import { FileSystem } from "@effect/platform";
 import { join } from "node:path";
-import { Effect, Layer, Ref } from "effect";
+import { Effect, Ref } from "effect";
 import type { AgentProvider } from "./AgentProvider.js";
-import { SilentDisplay, Display, type DisplayEntry } from "./Display.js";
+import { SilentDisplay, type DisplayEntry } from "./Display.js";
 import { preprocessPrompt } from "./PromptPreprocessor.js";
 import { resolvePrompt } from "./PromptResolver.js";
 import {
-  Sandbox,
   makeSandboxLayerFromHandle,
   resolveGitMounts,
   SANDBOX_WORKSPACE_DIR,
@@ -226,22 +224,6 @@ export const interactive = async (
         }),
       );
       handle = startResult.handle;
-    } else if (isHeadMode) {
-      const gitPath = join(hostRepoDir, ".git");
-      const gitMounts = await Effect.runPromise(
-        resolveGitMounts(gitPath).pipe(Effect.provide(NodeFileSystem.layer)),
-      );
-      const startResult = await Effect.runPromise(
-        startSandbox({
-          provider: sandboxProvider,
-          hostRepoDir,
-          env: effectiveEnv,
-          worktreeOrRepoPath: hostRepoDir,
-          gitMounts,
-          workspaceDir: SANDBOX_WORKSPACE_DIR,
-        }),
-      );
-      handle = startResult.handle;
     } else {
       const gitPath = join(hostRepoDir, ".git");
       const gitMounts = await Effect.runPromise(
@@ -252,7 +234,7 @@ export const interactive = async (
           provider: sandboxProvider,
           hostRepoDir,
           env: effectiveEnv,
-          worktreeOrRepoPath: worktreeInfo!.path,
+          worktreeOrRepoPath: isHeadMode ? hostRepoDir : worktreeInfo!.path,
           gitMounts,
           workspaceDir: SANDBOX_WORKSPACE_DIR,
         }),
