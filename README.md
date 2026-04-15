@@ -65,33 +65,32 @@ await run({
 
 ## Sandbox Providers
 
-Sandcastle uses a `SandboxProvider` to create isolated environments. The `sandbox` option on `run()` and `createSandbox()` accepts any provider. Three are built in:
+Sandcastle uses a `SandboxProvider` to create isolated environments. The `sandbox` option on `run()` and `createSandbox()` accepts any provider. A no-sandbox option is also available for `interactive()` only. Built-in providers:
 
-| Provider | Import path                            | Type       |
-| -------- | -------------------------------------- | ---------- |
-| Docker   | `@ai-hero/sandcastle/sandboxes/docker` | Bind-mount |
-| Podman   | `@ai-hero/sandcastle/sandboxes/podman` | Bind-mount |
-| Vercel   | `@ai-hero/sandcastle/sandboxes/vercel` | Isolated   |
+| Provider   | Import path                                | Type       | Accepted by                                 |
+| ---------- | ------------------------------------------ | ---------- | ------------------------------------------- |
+| Docker     | `@ai-hero/sandcastle/sandboxes/docker`     | Bind-mount | `run()`, `createSandbox()`, `interactive()` |
+| Podman     | `@ai-hero/sandcastle/sandboxes/podman`     | Bind-mount | `run()`, `createSandbox()`, `interactive()` |
+| Vercel     | `@ai-hero/sandcastle/sandboxes/vercel`     | Isolated   | `run()`, `createSandbox()`, `interactive()` |
+| No-sandbox | `@ai-hero/sandcastle/sandboxes/no-sandbox` | None       | `interactive()` only                        |
 
 ```typescript
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { vercel } from "@ai-hero/sandcastle/sandboxes/vercel";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 
-// All three are interchangeable in run() and createSandbox():
+// Docker, Podman, and Vercel are interchangeable in run() and createSandbox():
 await run({
   agent: claudeCode("claude-opus-4-6"),
   sandbox: docker(),
   prompt: "...",
 });
-await run({
+
+// No-sandbox runs the agent directly on the host — interactive() only:
+await interactive({
   agent: claudeCode("claude-opus-4-6"),
-  sandbox: podman(),
-  prompt: "...",
-});
-await run({
-  agent: claudeCode("claude-opus-4-6"),
-  sandbox: vercel(),
+  sandbox: noSandbox(),
   prompt: "...",
 });
 ```

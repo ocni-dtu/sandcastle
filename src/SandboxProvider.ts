@@ -160,6 +160,47 @@ export interface IsolatedSandboxProvider {
   ) => Promise<IsolatedSandboxHandle>;
 }
 
+/** Handle to a no-sandbox session — runs commands directly on the host. */
+export interface NoSandboxHandle {
+  /** Absolute path to the workspace on the host. */
+  readonly workspacePath: string;
+  /**
+   * Execute a command on the host.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work.
+   */
+  exec(
+    command: string,
+    options?: { onLine?: (line: string) => void; cwd?: string; sudo?: boolean },
+  ): Promise<ExecResult>;
+  /**
+   * Launch an interactive process on the host with inherited stdio.
+   */
+  interactiveExec(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
+  /** No-op — no container to tear down. */
+  close(): Promise<void>;
+}
+
+/** A no-sandbox provider — runs the agent directly on the host with no container isolation. */
+export interface NoSandboxProvider {
+  /** @internal Discriminator for internal dispatch. */
+  readonly tag: "none";
+  /** Human-readable provider name. */
+  readonly name: string;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
+  /** @internal Create a no-sandbox handle. */
+  readonly create: (options: {
+    readonly workspacePath: string;
+    readonly env: Record<string, string>;
+  }) => Promise<NoSandboxHandle>;
+}
+
 // ---------- Branch strategy types ----------
 
 /** Head strategy: agent writes directly to host working directory. Bind-mount only. */
@@ -189,16 +230,35 @@ export type IsolatedBranchStrategy =
   | MergeToHeadBranchStrategy
   | NamedBranchStrategy;
 
+/** Branch strategy for no-sandbox providers (all three — same as bind-mount). */
+export type NoSandboxBranchStrategy =
+  | HeadBranchStrategy
+  | MergeToHeadBranchStrategy
+  | NamedBranchStrategy;
+
 /** Union of all branch strategy variants. */
-export type BranchStrategy = BindMountBranchStrategy | IsolatedBranchStrategy;
+export type BranchStrategy =
+  | BindMountBranchStrategy
+  | IsolatedBranchStrategy
+  | NoSandboxBranchStrategy;
 
 /**
  * A sandbox provider — the pluggable unit that `run()` and `createSandbox()` accept.
  * Tagged for internal dispatch: "bind-mount" or "isolated".
+ * Does not include `NoSandboxProvider` — that is only valid for `interactive()`.
  */
 export type SandboxProvider =
   | BindMountSandboxProvider
   | IsolatedSandboxProvider;
+
+/**
+ * Any sandbox provider, including no-sandbox.
+ * This is the union accepted by `interactive()`.
+ */
+export type AnySandboxProvider =
+  | BindMountSandboxProvider
+  | IsolatedSandboxProvider
+  | NoSandboxProvider;
 
 /**
  * Create a bind-mount sandbox provider from a config object.

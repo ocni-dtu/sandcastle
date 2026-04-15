@@ -25,6 +25,10 @@
     "./sandboxes/daytona": {
       "import": "./dist/sandboxes/daytona.js",
       "types": "./dist/sandboxes/daytona.d.ts"
+    },
+    "./sandboxes/no-sandbox": {
+      "import": "./dist/sandboxes/no-sandbox.js",
+      "types": "./dist/sandboxes/no-sandbox.d.ts"
     }
   },
   "bin": {

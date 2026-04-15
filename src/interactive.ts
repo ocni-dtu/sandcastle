@@ -13,10 +13,11 @@ import {
 } from "./SandboxFactory.js";
 import { withSandboxLifecycle, type SandboxHooks } from "./SandboxLifecycle.js";
 import type {
-  SandboxProvider,
+  AnySandboxProvider,
   BranchStrategy,
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
+  NoSandboxHandle,
 } from "./SandboxProvider.js";
 import { resolveEnv } from "./EnvResolver.js";
 import { mergeProviderEnv } from "./mergeProviderEnv.js";
@@ -36,8 +37,8 @@ import {
 export interface InteractiveOptions {
   /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")) */
   readonly agent: AgentProvider;
-  /** Sandbox provider (e.g. docker()). */
-  readonly sandbox: SandboxProvider;
+  /** Sandbox provider (e.g. docker(), noSandbox()). */
+  readonly sandbox: AnySandboxProvider;
   /** Inline prompt string (mutually exclusive with promptFile). */
   readonly prompt?: string;
   /** Path to a prompt file (mutually exclusive with prompt). */
@@ -89,7 +90,7 @@ export const interactive = async (
     options.branchStrategy ??
     (options.sandbox.tag === "isolated"
       ? { type: "merge-to-head" }
-      : { type: "head" });
+      : { type: "head" }); // "bind-mount" and "none" both default to head
 
   // Validate: head strategy is not supported with isolated providers
   if (branchStrategy.type === "head" && options.sandbox.tag === "isolated") {
@@ -211,9 +212,10 @@ export const interactive = async (
         ),
       );
 
-      // Copy files to worktree (bind-mount only, non-head)
+      // Copy files to worktree (bind-mount and no-sandbox, non-head)
       if (
-        sandboxProvider.tag === "bind-mount" &&
+        (sandboxProvider.tag === "bind-mount" ||
+          sandboxProvider.tag === "none") &&
         options.copyToWorkspace &&
         options.copyToWorkspace.length > 0
       ) {
@@ -228,9 +230,21 @@ export const interactive = async (
     }
 
     // 6. Start sandbox
-    let handle: BindMountSandboxHandle | IsolatedSandboxHandle;
+    let handle:
+      | BindMountSandboxHandle
+      | IsolatedSandboxHandle
+      | NoSandboxHandle;
 
-    if (sandboxProvider.tag === "isolated") {
+    if (sandboxProvider.tag === "none") {
+      // No-sandbox: run directly on the host, no container
+      const workspacePath = isHeadMode ? hostRepoDir : worktreeInfo!.path;
+      handle = yield* Effect.promise(() =>
+        sandboxProvider.create({
+          workspacePath,
+          env: effectiveEnv,
+        }),
+      );
+    } else if (sandboxProvider.tag === "isolated") {
       const startResult = yield* d.taskLog("Starting sandbox", () =>
         startSandbox({
           provider: sandboxProvider,
@@ -258,7 +272,7 @@ export const interactive = async (
 
     // Run lifecycle with guaranteed cleanup of handle and worktree
     return yield* Effect.gen(function* () {
-      // Check interactiveExec is available
+      // Check interactiveExec is available (no-sandbox always has it; bind-mount/isolated it's optional)
       if (!handle.interactiveExec) {
         throw new Error(
           `Sandbox provider does not support interactiveExec. ` +
@@ -274,7 +288,7 @@ export const interactive = async (
       const applyToHost =
         sandboxProvider.tag === "isolated" && worktreeInfo
           ? () => syncOut(worktreeInfo!.path, handle as IsolatedSandboxHandle)
-          : () => Effect.void;
+          : () => Effect.void; // bind-mount and no-sandbox don't need sync
 
       const lifecycleEffect = withSandboxLifecycle(
         {
@@ -297,7 +311,7 @@ export const interactive = async (
             // Build interactive args and run the session
             const interactiveArgs = provider.buildInteractiveArgs!({
               prompt: fullPrompt,
-              dangerouslySkipPermissions: true,
+              dangerouslySkipPermissions: sandboxProvider.tag !== "none",
             });
             const result = yield* Effect.promise(() =>
               interactiveExecFn(interactiveArgs, {

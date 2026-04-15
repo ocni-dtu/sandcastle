@@ -20,6 +20,7 @@ import type {
   BindMountSandboxProvider,
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
+  NoSandboxHandle,
 } from "./SandboxProvider.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
@@ -60,7 +61,7 @@ export class Sandbox extends Context.Tag("Sandbox")<
  * isolated handles (copyIn/copyFileOut delegated to the handle).
  */
 export const makeSandboxLayerFromHandle = (
-  handle: BindMountSandboxHandle | IsolatedSandboxHandle,
+  handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
 ): Layer.Layer<Sandbox> =>
   Layer.succeed(Sandbox, {
     exec: (command, options) =>
