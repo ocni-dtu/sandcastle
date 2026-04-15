@@ -14,11 +14,12 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { podman, defaultImageName } from "./podman.js";
 
 const mockExecFile = vi.mocked(execFile);
+const mockExecFileSync = vi.mocked(execFileSync);
 
 afterEach(() => {
   mockExecFile.mockReset();
@@ -197,6 +198,140 @@ describe("podman()", () => {
     expect(runArgs).toContain(`${homedir()}:/mnt/home`);
     // Should NOT have any trailing options
     expect(runArgs).not.toContain(`${homedir()}:/mnt/home:`);
+
+    await handle.close();
+  });
+
+  it("passes --userns=keep-id by default", async () => {
+    mockExecFile.mockImplementation((_command, _args, callback: any) => {
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    const provider = podman();
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    const runArgs = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    )?.[1] as string[];
+
+    expect(runArgs).toContain("--userns=keep-id");
+
+    await handle.close();
+  });
+
+  it("allows disabling userns via option", async () => {
+    mockExecFile.mockImplementation((_command, _args, callback: any) => {
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    const provider = podman({ userns: false });
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    const runArgs = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "run",
+    )?.[1] as string[];
+
+    expect(runArgs).not.toContain("--userns=keep-id");
+
+    await handle.close();
+  });
+
+  it("throws a clear error when image is not found locally", async () => {
+    // First call is podman image inspect — fail it
+    mockExecFile.mockImplementationOnce((_command, _args, callback: any) => {
+      callback(new Error("no such image"), "", "");
+      return undefined as any;
+    });
+
+    const provider = podman({ imageName: "my-app:latest" });
+
+    await expect(
+      provider.create({
+        worktreePath: "/tmp/worktree",
+        hostRepoPath: "/tmp/repo",
+        mounts: [
+          { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+        ],
+        env: {},
+      }),
+    ).rejects.toThrow(
+      "Image 'my-app:latest' not found locally. Build it first with 'podman build -t my-app:latest .'",
+    );
+  });
+
+  it("checks for Podman Machine on macOS", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+
+    try {
+      // podman machine list returns no running machines
+      mockExecFile.mockImplementationOnce((_command, _args, callback: any) => {
+        callback(null, "[]", "");
+        return undefined as any;
+      });
+
+      const provider = podman();
+
+      await expect(
+        provider.create({
+          worktreePath: "/tmp/worktree",
+          hostRepoPath: "/tmp/repo",
+          mounts: [
+            { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+          ],
+          env: {},
+        }),
+      ).rejects.toThrow("Podman Machine is not running");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("includes timeout on signal handler cleanup", async () => {
+    // Allow image inspect + podman run to succeed
+    mockExecFile.mockImplementation((_command, _args, callback: any) => {
+      callback(null, "", "");
+      return undefined as any;
+    });
+
+    const provider = podman();
+    const handle = await provider.create({
+      worktreePath: "/tmp/worktree",
+      hostRepoPath: "/tmp/repo",
+      mounts: [
+        { hostPath: "/tmp/worktree", sandboxPath: "/home/agent/workspace" },
+      ],
+      env: {},
+    });
+
+    // Trigger a registered exit handler
+    const exitListeners = process.listeners("exit");
+    const sandcastleListener = exitListeners[exitListeners.length - 1];
+    sandcastleListener!(0);
+
+    // Check that execFileSync was called with timeout option
+    const rmCall = mockExecFileSync.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "podman" && Array.isArray(args) && args[0] === "rm",
+    );
+    expect(rmCall).toBeDefined();
+    expect(rmCall![2]).toMatchObject({ timeout: 5000 });
 
     await handle.close();
   });

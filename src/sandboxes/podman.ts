@@ -38,6 +38,14 @@ export interface PodmanOptions {
    */
   readonly selinuxLabel?: "z" | "Z" | false;
   /**
+   * User namespace mode for rootless Podman.
+   *
+   * - `"keep-id"` (default) — maps host UID 1:1 into the container,
+   *   so bind-mounted files have correct ownership. Required for rootless Podman.
+   * - `false` — disable; use for rootful Podman setups.
+   */
+  readonly userns?: "keep-id" | false;
+  /**
    * Additional host directories to bind-mount into the sandbox.
    *
    * Each entry specifies a `hostPath` (tilde-expanded) and `sandboxPath`.
@@ -59,6 +67,7 @@ export interface PodmanOptions {
 export const podman = (options?: PodmanOptions): SandboxProvider => {
   const configuredImageName = options?.imageName;
   const selinuxLabel = options?.selinuxLabel ?? "z";
+  const userns = options?.userns ?? "keep-id";
   const userMounts = options?.mounts ? resolveUserMounts(options.mounts) : [];
 
   return createBindMountSandboxProvider({
@@ -84,6 +93,14 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
       const imageName =
         configuredImageName ?? defaultImageName(createOptions.hostRepoPath);
 
+      // Pre-flight: check Podman Machine on macOS/Windows
+      if (process.platform === "darwin" || process.platform === "win32") {
+        await checkPodmanMachine();
+      }
+
+      // Pre-flight: verify image exists locally
+      await checkImageExists(imageName);
+
       const hostUid = process.getuid?.() ?? 1000;
       const hostGid = process.getgid?.() ?? 1000;
 
@@ -93,6 +110,7 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
         `${key}=${value}`,
       ]);
       const volumeArgs = volumeMounts.flatMap((v) => ["-v", v]);
+      const usernsArgs = userns ? [`--userns=${userns}`] : [];
 
       // Start container via podman run
       await new Promise<void>((resolve, reject) => {
@@ -105,6 +123,7 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
             containerName,
             "--user",
             `${hostUid}:${hostGid}`,
+            ...usernsArgs,
             "-w",
             workspacePath,
             ...envArgs,
@@ -128,6 +147,7 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
         try {
           execFileSync("podman", ["rm", "-f", containerName], {
             stdio: "ignore",
+            timeout: 5000,
           });
         } catch {
           /* best-effort */
@@ -301,6 +321,60 @@ const resolveUserMounts = (
       sandboxPath: m.sandboxPath,
       ...(m.readonly ? { readonly: true } : {}),
     };
+  });
+
+const checkImageExists = (imageName: string): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    execFile("podman", ["image", "inspect", imageName], (error) => {
+      if (error) {
+        reject(
+          new Error(
+            `Image '${imageName}' not found locally. Build it first with 'podman build -t ${imageName} .'`,
+          ),
+        );
+      } else {
+        resolve();
+      }
+    });
+  });
+
+const checkPodmanMachine = (): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    execFile(
+      "podman",
+      ["machine", "list", "--format", "json"],
+      (error, stdout) => {
+        if (error) {
+          reject(
+            new Error(
+              "Podman Machine is not running. Run 'podman machine init && podman machine start' first.",
+            ),
+          );
+          return;
+        }
+        try {
+          const machines = JSON.parse(stdout.toString()) as Array<{
+            Running?: boolean;
+          }>;
+          const hasRunning = machines.some((m) => m.Running);
+          if (!hasRunning) {
+            reject(
+              new Error(
+                "Podman Machine is not running. Run 'podman machine init && podman machine start' first.",
+              ),
+            );
+          } else {
+            resolve();
+          }
+        } catch {
+          reject(
+            new Error(
+              "Podman Machine is not running. Run 'podman machine init && podman machine start' first.",
+            ),
+          );
+        }
+      },
+    );
   });
 
 const formatVolumeMount = (
