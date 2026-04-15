@@ -611,6 +611,75 @@ describe("InitService scaffold", () => {
     expect(mainTs).not.toContain("claudeCode");
   });
 
+  // --- createLabel option ---
+
+  it("simple-loop prompt.md retains --label Sandcastle when createLabel is true", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop", createLabel: true });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).toContain("--label Sandcastle");
+  });
+
+  it("simple-loop prompt.md strips --label Sandcastle when createLabel is false", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop", createLabel: false });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).not.toContain("--label Sandcastle");
+    // The gh issue list command should still be valid
+    expect(prompt).toContain("gh issue list");
+    // No double spaces in gh commands from removal
+    expect(prompt).not.toMatch(/gh issue list {2}/);
+  });
+
+  it("parallel-planner plan-prompt.md strips --label Sandcastle when createLabel is false", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "parallel-planner",
+      createLabel: false,
+    });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "plan-prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).not.toContain("--label Sandcastle");
+    expect(prompt).toContain("gh issue list");
+  });
+
+  it("sequential-reviewer implement-prompt.md strips --label Sandcastle when createLabel is false", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "sequential-reviewer",
+      createLabel: false,
+    });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "implement-prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).not.toContain("--label Sandcastle");
+    expect(prompt).toContain("gh issue list");
+  });
+
+  it("createLabel defaults to true (label retained when not specified)", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop" });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).toContain("--label Sandcastle");
+  });
+
   it("unknown template name throws a clear error", async () => {
     const dir = await makeDir();
     await expect(

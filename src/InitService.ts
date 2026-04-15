@@ -374,6 +374,39 @@ const rewriteMainTs = (
       .pipe(Effect.mapError((e) => new Error(e.message)));
   });
 
+/**
+ * When the user opted out of the Sandcastle label, strip ` --label Sandcastle`
+ * from all `.md` files in the scaffolded config directory so that `gh issue list`
+ * commands work without a label filter.
+ */
+const rewritePromptFiles = (
+  configDir: string,
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const files = yield* fs
+      .readDirectory(configDir)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    yield* Effect.all(
+      mdFiles.map((f) =>
+        Effect.gen(function* () {
+          const filePath = join(configDir, f);
+          let content = yield* fs
+            .readFileString(filePath)
+            .pipe(Effect.mapError((e) => new Error(e.message)));
+          const updated = content.replace(/ --label Sandcastle/g, "");
+          if (updated !== content) {
+            yield* fs
+              .writeFileString(filePath, updated)
+              .pipe(Effect.mapError((e) => new Error(e.message)));
+          }
+        }),
+      ),
+      { concurrency: "unbounded" },
+    );
+  });
+
 // ---------------------------------------------------------------------------
 // Main scaffold function
 // ---------------------------------------------------------------------------
@@ -382,6 +415,7 @@ export interface ScaffoldOptions {
   agent: AgentEntry;
   model: string;
   templateName?: string;
+  createLabel?: boolean;
 }
 
 export interface ScaffoldResult {
@@ -418,7 +452,12 @@ export const scaffold = (
   options: ScaffoldOptions,
 ): Effect.Effect<ScaffoldResult, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const { agent, model, templateName = "blank" } = options;
+    const {
+      agent,
+      model,
+      templateName = "blank",
+      createLabel = true,
+    } = options;
     const fs = yield* FileSystem.FileSystem;
     const configDir = join(repoDir, ".sandcastle");
 
@@ -459,6 +498,11 @@ export const scaffold = (
 
     // Rewrite main file with the selected agent factory and model
     yield* rewriteMainTs(configDir, agent, model, mainFilename);
+
+    // Strip --label Sandcastle from prompt files when the user declined label creation
+    if (!createLabel) {
+      yield* rewritePromptFiles(configDir);
+    }
 
     return { mainFilename };
   });

@@ -197,6 +197,7 @@ const initCommand = Command.make(
           agent: selectedAgent,
           model: selectedModel,
           templateName: selectedTemplate,
+          createLabel: shouldCreateLabel === true,
         }).pipe(
           Effect.mapError(
             (e) =>
