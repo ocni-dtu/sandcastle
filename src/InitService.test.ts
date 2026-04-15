@@ -1305,6 +1305,103 @@ describe("InitService scaffold", () => {
       expect(prompt).not.toContain("gh issue");
       expect(prompt).not.toContain("{{VIEW_TASK_COMMAND}}");
     });
+
+    // --- parallel-planner-with-review ---
+
+    it("parallel-planner-with-review with github-issues produces plan-prompt with gh issue commands", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+        backlogManager: getBacklogManager("github-issues"),
+      });
+
+      const planPrompt = await readFile(
+        join(dir, ".sandcastle", "plan-prompt.md"),
+        "utf-8",
+      );
+      expect(planPrompt).toContain("gh issue list");
+      expect(planPrompt).toContain("labels");
+      expect(planPrompt).toContain("comments");
+      expect(planPrompt).not.toContain("{{LIST_TASKS_COMMAND}}");
+    });
+
+    it("parallel-planner-with-review with beads produces plan-prompt with bd commands", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+        backlogManager: getBacklogManager("beads"),
+      });
+
+      const planPrompt = await readFile(
+        join(dir, ".sandcastle", "plan-prompt.md"),
+        "utf-8",
+      );
+      expect(planPrompt).toContain("bd ready --json");
+      expect(planPrompt).not.toContain("gh issue");
+      expect(planPrompt).not.toContain("{{LIST_TASKS_COMMAND}}");
+    });
+
+    it("parallel-planner-with-review main.mts uses id:string and TASK_ID", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+      });
+
+      const main = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(main).toContain("id: string");
+      expect(main).toContain("TASK_ID: issue.id");
+      expect(main).not.toContain("number: number");
+      expect(main).not.toContain("ISSUE_NUMBER");
+      expect(main).not.toContain("`  #${");
+    });
+
+    it("parallel-planner-with-review implement-prompt uses TASK_ID placeholder", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+      });
+
+      const prompt = await readFile(
+        join(dir, ".sandcastle", "implement-prompt.md"),
+        "utf-8",
+      );
+      expect(prompt).toContain("{{TASK_ID}}");
+      expect(prompt).not.toContain("{{ISSUE_NUMBER}}");
+    });
+
+    it("parallel-planner-with-review with github-issues produces implement-prompt with gh issue view", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+        backlogManager: getBacklogManager("github-issues"),
+      });
+
+      const prompt = await readFile(
+        join(dir, ".sandcastle", "implement-prompt.md"),
+        "utf-8",
+      );
+      expect(prompt).toContain("gh issue view");
+      expect(prompt).not.toContain("{{VIEW_TASK_COMMAND}}");
+    });
+
+    it("parallel-planner-with-review with beads produces implement-prompt with bd show", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        templateName: "parallel-planner-with-review",
+        backlogManager: getBacklogManager("beads"),
+      });
+
+      const prompt = await readFile(
+        join(dir, ".sandcastle", "implement-prompt.md"),
+        "utf-8",
+      );
+      expect(prompt).toContain("bd show");
+      expect(prompt).not.toContain("gh issue");
+      expect(prompt).not.toContain("{{VIEW_TASK_COMMAND}}");
+    });
   });
 
   // --- ESM extension detection ---
