@@ -51,47 +51,10 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
         },
       ): Promise<ExecResult> => {
         // sudo is a no-op for no-sandbox — the user is already on the host
-        const effectiveCommand = command;
         const cwd = opts?.cwd ?? workspacePath;
 
-        if (opts?.onLine) {
-          const onLine = opts.onLine;
-          return new Promise((resolve, reject) => {
-            const proc = spawn("sh", ["-c", effectiveCommand], {
-              cwd,
-              env: processEnv,
-              stdio: ["ignore", "pipe", "pipe"],
-            });
-
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line);
-            });
-
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
-            });
-
-            proc.on("error", (error) => {
-              reject(new Error(`exec failed: ${error.message}`));
-            });
-
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          });
-        }
-
         return new Promise((resolve, reject) => {
-          const proc = spawn("sh", ["-c", effectiveCommand], {
+          const proc = spawn("sh", ["-c", command], {
             cwd,
             env: processEnv,
             stdio: ["ignore", "pipe", "pipe"],
@@ -100,9 +63,17 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
           const stdoutChunks: string[] = [];
           const stderrChunks: string[] = [];
 
-          proc.stdout!.on("data", (chunk: Buffer) => {
-            stdoutChunks.push(chunk.toString());
-          });
+          if (opts?.onLine) {
+            const rl = createInterface({ input: proc.stdout! });
+            rl.on("line", (line) => {
+              stdoutChunks.push(line);
+              opts.onLine!(line);
+            });
+          } else {
+            proc.stdout!.on("data", (chunk: Buffer) => {
+              stdoutChunks.push(chunk.toString());
+            });
+          }
 
           proc.stderr!.on("data", (chunk: Buffer) => {
             stderrChunks.push(chunk.toString());
@@ -114,7 +85,7 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
 
           proc.on("close", (code) => {
             resolve({
-              stdout: stdoutChunks.join(""),
+              stdout: stdoutChunks.join(opts?.onLine ? "\n" : ""),
               stderr: stderrChunks.join(""),
               exitCode: code ?? 0,
             });

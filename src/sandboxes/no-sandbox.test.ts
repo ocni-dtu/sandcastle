@@ -97,21 +97,6 @@ describe("noSandbox", () => {
         env: {},
       });
 
-      // Use /dev/null as stdin and capture via pipe
-      const { openSync } = await import("node:fs");
-      const devNull = openSync("/dev/null", "r");
-      const { Writable } = await import("node:stream");
-      const stdout = new Writable({
-        write(_c, _e, cb) {
-          cb();
-        },
-      });
-      const stderr = new Writable({
-        write(_c, _e, cb) {
-          cb();
-        },
-      });
-
       const result = await handle.interactiveExec(["sh", "-c", "exit 0"], {
         stdin: process.stdin,
         stdout: process.stdout,
