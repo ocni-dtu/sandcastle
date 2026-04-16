@@ -128,16 +128,77 @@ describe("InitService scaffold", () => {
     expect(dockerfile).not.toContain("{{BACKLOG_MANAGER_TOOLS}}");
   });
 
-  it("copies .env.example from template directory", async () => {
+  // --- Dynamic .env.example generation ---
+
+  it.each([
+    {
+      agent: claudeCodeAgent,
+      expectedKey: "ANTHROPIC_API_KEY=",
+      unexpectedKey: "OPENAI_KEY=",
+      expectIssue191Link: true,
+    },
+    {
+      agent: piAgent,
+      expectedKey: "ANTHROPIC_API_KEY=",
+      unexpectedKey: "OPENAI_KEY=",
+      expectIssue191Link: false,
+    },
+    {
+      agent: codexAgent,
+      expectedKey: "OPENAI_KEY=",
+      unexpectedKey: "ANTHROPIC_API_KEY=",
+      expectIssue191Link: false,
+    },
+    {
+      agent: opencodeAgent,
+      expectedKey: "OPENCODE_API_KEY=",
+      unexpectedKey: "ANTHROPIC_API_KEY=",
+      expectIssue191Link: false,
+    },
+  ])(
+    "generates .env.example with $agent.name env var",
+    async ({ agent, expectedKey, unexpectedKey, expectIssue191Link }) => {
+      const dir = await makeDir();
+      await runScaffold(dir, { agent, model: agent.defaultModel });
+
+      const envExample = await readFile(
+        join(dir, ".sandcastle", ".env.example"),
+        "utf-8",
+      );
+      expect(envExample).toContain(expectedKey);
+      expect(envExample).not.toContain(unexpectedKey);
+      if (expectIssue191Link) {
+        expect(envExample).toContain("issues/191");
+      } else {
+        expect(envExample).not.toContain("issues/191");
+      }
+    },
+  );
+
+  it("generates .env.example with GH_TOKEN when backlog manager is github-issues", async () => {
     const dir = await makeDir();
-    await runScaffold(dir);
+    await runScaffold(dir, {
+      backlogManager: getBacklogManager("github-issues"),
+    });
 
     const envExample = await readFile(
       join(dir, ".sandcastle", ".env.example"),
       "utf-8",
     );
-    expect(envExample).toContain("ANTHROPIC_API_KEY=");
     expect(envExample).toContain("GH_TOKEN=");
+  });
+
+  it("generates .env.example without GH_TOKEN when backlog manager is beads", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      backlogManager: getBacklogManager("beads"),
+    });
+
+    const envExample = await readFile(
+      join(dir, ".sandcastle", ".env.example"),
+      "utf-8",
+    );
+    expect(envExample).not.toContain("GH_TOKEN=");
   });
 
   it("does not scaffold config.json for blank template", async () => {
@@ -802,7 +863,9 @@ describe("InitService scaffold", () => {
         join(configDir, ".env.example"),
         "utf-8",
       );
+      // Dynamic env: claude-code agent → ANTHROPIC_API_KEY, default backlog → GH_TOKEN
       expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      expect(envExample).toContain("GH_TOKEN=");
     });
   });
 
@@ -972,7 +1035,9 @@ describe("InitService scaffold", () => {
         join(configDir, ".env.example"),
         "utf-8",
       );
+      // Dynamic env: claude-code agent → ANTHROPIC_API_KEY, default backlog → GH_TOKEN
       expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      expect(envExample).toContain("GH_TOKEN=");
     });
 
     it("main.mts references the specified model for all factory calls", async () => {

@@ -52,6 +52,8 @@ export interface AgentEntry {
   readonly defaultModel: string;
   readonly factoryImport: string;
   readonly dockerfileTemplate: string;
+  /** Lines to include in the generated `.env.example` for this agent's API key. */
+  readonly envExample: string;
 }
 
 const CLAUDE_CODE_DOCKERFILE = `FROM node:22-bookworm
@@ -179,6 +181,9 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "claude-opus-4-6",
     factoryImport: "claudeCode",
     dockerfileTemplate: CLAUDE_CODE_DOCKERFILE,
+    envExample: `# Anthropic API key
+# If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191
+ANTHROPIC_API_KEY=`,
   },
   {
     name: "pi",
@@ -186,6 +191,8 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "claude-sonnet-4-6",
     factoryImport: "pi",
     dockerfileTemplate: PI_DOCKERFILE,
+    envExample: `# Anthropic API key
+ANTHROPIC_API_KEY=`,
   },
   {
     name: "codex",
@@ -193,6 +200,8 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "gpt-5.4-mini",
     factoryImport: "codex",
     dockerfileTemplate: CODEX_DOCKERFILE,
+    envExample: `# OpenAI API key
+OPENAI_KEY=`,
   },
   {
     name: "opencode",
@@ -200,6 +209,8 @@ const AGENT_REGISTRY: AgentEntry[] = [
     defaultModel: "opencode/big-pickle",
     factoryImport: "opencode",
     dockerfileTemplate: OPENCODE_DOCKERFILE,
+    envExample: `# OpenCode API key
+OPENCODE_API_KEY=`,
   },
 ];
 
@@ -218,6 +229,8 @@ export interface BacklogManagerEntry {
     readonly CLOSE_TASK_COMMAND: string;
     readonly BACKLOG_MANAGER_TOOLS: string;
   };
+  /** Lines to append to `.env.example` for this backlog manager, or empty string if none needed. */
+  readonly envExample: string;
 }
 
 const GITHUB_CLI_TOOLS = `# Install GitHub CLI
@@ -250,6 +263,8 @@ const BACKLOG_MANAGER_REGISTRY: BacklogManagerEntry[] = [
       CLOSE_TASK_COMMAND: `gh issue close {{TASK_ID}} --comment "Completed by Sandcastle"`,
       BACKLOG_MANAGER_TOOLS: GITHUB_CLI_TOOLS,
     },
+    envExample: `# GitHub personal access token
+GH_TOKEN=`,
   },
   {
     name: "beads",
@@ -260,6 +275,7 @@ const BACKLOG_MANAGER_REGISTRY: BacklogManagerEntry[] = [
       CLOSE_TASK_COMMAND: `bd close {{TASK_ID}} "Completed by Sandcastle"`,
       BACKLOG_MANAGER_TOOLS: BEADS_TOOLS,
     },
+    envExample: "",
   },
 ];
 
@@ -398,6 +414,7 @@ const copyTemplateFiles = (
         .filter(
           (f) =>
             f !== "template.json" &&
+            f !== ".env.example" &&
             !COMPILED_FILE_EXTENSIONS.some((ext) => f.endsWith(ext)),
         )
         .map((f) => {
@@ -632,6 +649,13 @@ export const scaffold = (
 
     const templateDir = yield* getTemplateDir(templateName);
 
+    // Build .env.example from agent + backlog manager env blocks
+    const envExampleParts = [agent.envExample];
+    if (backlogManager.envExample) {
+      envExampleParts.push(backlogManager.envExample);
+    }
+    const envExampleContent = envExampleParts.join("\n") + "\n";
+
     yield* Effect.all(
       [
         fs
@@ -642,6 +666,9 @@ export const scaffold = (
           .pipe(Effect.mapError((e) => new Error(e.message))),
         fs
           .writeFileString(join(configDir, ".gitignore"), GITIGNORE)
+          .pipe(Effect.mapError((e) => new Error(e.message))),
+        fs
+          .writeFileString(join(configDir, ".env.example"), envExampleContent)
           .pipe(Effect.mapError((e) => new Error(e.message))),
         copyTemplateFiles(templateDir, configDir, mainFilename),
       ],
