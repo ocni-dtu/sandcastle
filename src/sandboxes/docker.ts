@@ -6,7 +6,12 @@
  *   await run({ agent: claudeCode("claude-opus-4-6"), sandbox: docker() });
  */
 
-import { execFile, execFileSync, spawn } from "node:child_process";
+import {
+  execFile,
+  execFileSync,
+  spawn,
+  type StdioOptions,
+} from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { Effect } from "effect";
@@ -17,18 +22,39 @@ import {
 } from "../DockerLifecycle.js";
 import {
   createBindMountSandboxProvider,
-  type BindMountBranchStrategy,
   type SandboxProvider,
   type BindMountCreateOptions,
   type BindMountSandboxHandle,
   type ExecResult,
+  type InteractiveExecOptions,
 } from "../SandboxProvider.js";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
+import type { MountConfig } from "../MountConfig.js";
+import { SANDBOX_REPO_DIR } from "../SandboxFactory.js";
 
 export interface DockerOptions {
   /** Docker image name (default: derived from repo directory name). */
   readonly imageName?: string;
-  /** Branch strategy for this provider. Defaults to { type: "head" }. */
-  readonly branchStrategy?: BindMountBranchStrategy;
+  /**
+   * Additional host directories to bind-mount into the sandbox.
+   *
+   * Each entry specifies a `hostPath` (tilde-expanded) and `sandboxPath`.
+   * If `hostPath` does not exist, sandbox creation fails with a clear error.
+   */
+  readonly mounts?: readonly MountConfig[];
+  /** Environment variables injected by this provider. Merged at launch time with env resolver and agent provider env. */
+  readonly env?: Record<string, string>;
+  /**
+   * Docker network(s) to attach the container to.
+   *
+   * - `"my-network"` → `--network my-network`
+   * - `["net1", "net2"]` → `--network net1 --network net2`
+   *
+   * When omitted, Docker's default bridge network is used.
+   */
+  readonly network?: string | readonly string[];
 }
 
 /**
@@ -39,22 +65,24 @@ export interface DockerOptions {
  */
 export const docker = (options?: DockerOptions): SandboxProvider => {
   const configuredImageName = options?.imageName;
+  const userMounts = options?.mounts ? resolveUserMounts(options.mounts) : [];
 
   return createBindMountSandboxProvider({
     name: "docker",
-    branchStrategy: options?.branchStrategy,
+    env: options?.env,
     create: async (
       createOptions: BindMountCreateOptions,
     ): Promise<BindMountSandboxHandle> => {
       const containerName = `sandcastle-${randomUUID()}`;
 
-      const workspacePath =
+      const worktreePath =
         createOptions.mounts.find(
           (m) => m.hostPath === createOptions.worktreePath,
         )?.sandboxPath ?? "/home/agent/workspace";
 
-      // Build volume mount strings
-      const volumeMounts = createOptions.mounts.map((m) => {
+      // Build volume mount strings (internal mounts + user-provided mounts)
+      const allMounts = [...createOptions.mounts, ...userMounts];
+      const volumeMounts = allMounts.map((m) => {
         const base = `${m.hostPath}:${m.sandboxPath}`;
         return m.readonly ? `${base}:ro` : base;
       });
@@ -77,8 +105,9 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
           },
           {
             volumeMounts,
-            workdir: workspacePath,
+            workdir: worktreePath,
             user: `${hostUid}:${hostGid}`,
+            network: options?.network,
           },
         ).pipe(
           Effect.andThen(
@@ -110,14 +139,56 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
       process.on("SIGTERM", onSignal);
 
       const handle: BindMountSandboxHandle = {
-        workspacePath,
+        worktreePath,
 
-        exec: (command: string, opts?: { cwd?: string }): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const args = ["exec"];
-            if (opts?.cwd) args.push("-w", opts.cwd);
-            args.push(containerName, "sh", "-c", command);
+        exec: (
+          command: string,
+          opts?: {
+            onLine?: (line: string) => void;
+            cwd?: string;
+            sudo?: boolean;
+          },
+        ): Promise<ExecResult> => {
+          const effectiveCommand = opts?.sudo ? `sudo ${command}` : command;
+          const args = ["exec"];
+          if (opts?.cwd) args.push("-w", opts.cwd);
+          args.push(containerName, "sh", "-c", effectiveCommand);
 
+          if (opts?.onLine) {
+            const onLine = opts.onLine;
+            return new Promise((resolve, reject) => {
+              const proc = spawn("docker", args, {
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+
+              const stdoutChunks: string[] = [];
+              const stderrChunks: string[] = [];
+
+              const rl = createInterface({ input: proc.stdout! });
+              rl.on("line", (line) => {
+                stdoutChunks.push(line);
+                onLine(line);
+              });
+
+              proc.stderr!.on("data", (chunk: Buffer) => {
+                stderrChunks.push(chunk.toString());
+              });
+
+              proc.on("error", (error) => {
+                reject(new Error(`docker exec failed: ${error.message}`));
+              });
+
+              proc.on("close", (code) => {
+                resolve({
+                  stdout: stdoutChunks.join("\n"),
+                  stderr: stderrChunks.join(""),
+                  exitCode: code ?? 0,
+                });
+              });
+            });
+          }
+
+          return new Promise((resolve, reject) => {
             execFile(
               "docker",
               args,
@@ -134,49 +205,40 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
                 }
               },
             );
-          }),
+          });
+        },
 
-        execStreaming: (
-          command: string,
-          onLine: (line: string) => void,
-          opts?: { cwd?: string },
-        ): Promise<ExecResult> =>
-          new Promise((resolve, reject) => {
-            const args = ["exec"];
-            if (opts?.cwd) args.push("-w", opts.cwd);
-            args.push(containerName, "sh", "-c", command);
+        interactiveExec: (
+          args: string[],
+          opts: InteractiveExecOptions,
+        ): Promise<{ exitCode: number }> => {
+          return new Promise((resolve, reject) => {
+            const dockerArgs = ["exec"];
+            // Allocate a pseudo-terminal when stdin looks like a TTY
+            if (
+              "isTTY" in opts.stdin &&
+              (opts.stdin as { isTTY?: boolean }).isTTY
+            ) {
+              dockerArgs.push("-it");
+            } else {
+              dockerArgs.push("-i");
+            }
+            if (opts.cwd) dockerArgs.push("-w", opts.cwd);
+            dockerArgs.push(containerName, ...args);
 
-            const proc = spawn("docker", args, {
-              stdio: ["ignore", "pipe", "pipe"],
+            const proc = spawn("docker", dockerArgs, {
+              stdio: [opts.stdin, opts.stdout, opts.stderr] as StdioOptions,
             });
 
-            const stdoutChunks: string[] = [];
-            const stderrChunks: string[] = [];
-
-            const rl = createInterface({ input: proc.stdout! });
-            rl.on("line", (line) => {
-              stdoutChunks.push(line);
-              onLine(line);
+            proc.on("error", (error: Error) => {
+              reject(new Error(`docker exec failed: ${error.message}`));
             });
 
-            proc.stderr!.on("data", (chunk: Buffer) => {
-              stderrChunks.push(chunk.toString());
+            proc.on("close", (code: number | null) => {
+              resolve({ exitCode: code ?? 0 });
             });
-
-            proc.on("error", (error) => {
-              reject(
-                new Error(`docker exec streaming failed: ${error.message}`),
-              );
-            });
-
-            proc.on("close", (code) => {
-              resolve({
-                stdout: stdoutChunks.join("\n"),
-                stderr: stderrChunks.join(""),
-                exitCode: code ?? 0,
-              });
-            });
-          }),
+          });
+        },
 
         close: async (): Promise<void> => {
           process.removeListener("exit", onExit);
@@ -201,3 +263,41 @@ export const defaultImageName = (repoDir: string): string => {
   const sanitized = dirName.toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
   return `sandcastle:${sanitized}`;
 };
+
+const expandTilde = (p: string): string => {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return homedir() + p.slice(1);
+  return p;
+};
+
+const resolveHostPath = (hostPath: string): string => {
+  const expanded = expandTilde(hostPath);
+  return isAbsolute(expanded) ? expanded : resolve(process.cwd(), expanded);
+};
+
+const resolveSandboxPath = (sandboxPath: string): string =>
+  isAbsolute(sandboxPath)
+    ? sandboxPath
+    : resolve(SANDBOX_REPO_DIR, sandboxPath);
+
+const resolveUserMounts = (
+  mounts: readonly MountConfig[],
+): Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }> =>
+  mounts.map((m) => {
+    const resolvedHostPath = resolveHostPath(m.hostPath);
+
+    if (!existsSync(resolvedHostPath)) {
+      throw new Error(
+        `Mount hostPath does not exist: ${m.hostPath}` +
+          (m.hostPath !== resolvedHostPath
+            ? ` (resolved to ${resolvedHostPath})`
+            : ""),
+      );
+    }
+
+    return {
+      hostPath: resolvedHostPath,
+      sandboxPath: resolveSandboxPath(m.sandboxPath),
+      ...(m.readonly ? { readonly: true } : {}),
+    };
+  });

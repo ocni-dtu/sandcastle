@@ -36,7 +36,7 @@ const hooks = {
 // Copy node_modules from the host into the worktree before each sandbox
 // starts. Avoids a full npm install from scratch; the hook above handles
 // platform-specific binaries and any packages added since the last copy.
-const copyToSandbox = ["node_modules"];
+const copyToWorktree = ["node_modules"];
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -56,7 +56,6 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   const plan = await sandcastle.run({
     hooks,
-    copyToSandbox,
     sandbox: docker(),
     name: "planner",
     // One iteration is enough: the planner just needs to read and reason,
@@ -75,9 +74,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     );
   }
 
-  // The plan JSON contains an array of issues, each with number, title, branch.
+  // The plan JSON contains an array of issues, each with id, title, branch.
   const { issues } = JSON.parse(planMatch[1]!) as {
-    issues: { number: number; title: string; branch: string }[];
+    issues: { id: string; title: string; branch: string }[];
   };
 
   if (issues.length === 0) {
@@ -90,7 +89,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     `Planning complete. ${issues.length} issue(s) to work in parallel:`,
   );
   for (const issue of issues) {
-    console.log(`  #${issue.number}: ${issue.title} → ${issue.branch}`);
+    console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
   }
 
   // -------------------------------------------------------------------------
@@ -106,20 +105,21 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     issues.map((issue) =>
       sandcastle.run({
         hooks,
-        copyToSandbox,
-        // Each agent starts on its own branch via the provider's branchStrategy.
-        sandbox: docker({ branchStrategy: { type: "branch", branch: issue.branch } }),
+        copyToWorktree,
+        // Each agent starts on its own branch via branchStrategy on run().
+        sandbox: docker(),
+        branchStrategy: { type: "branch", branch: issue.branch },
         name: "implementer",
         // Give each agent plenty of room to implement and iterate on tests.
         maxIterations: 100,
         // Sonnet for execution: fast and capable enough for typical issue work.
         agent: sandcastle.claudeCode("claude-sonnet-4-6"),
         promptFile: "./.sandcastle/implement-prompt.md",
-        // Prompt arguments substitute {{ISSUE_NUMBER}}, {{ISSUE_TITLE}},
+        // Prompt arguments substitute {{TASK_ID}}, {{ISSUE_TITLE}},
         // and {{BRANCH}} placeholders in implement-prompt.md before the
         // agent sees the prompt.
         promptArgs: {
-          ISSUE_NUMBER: String(issue.number),
+          TASK_ID: issue.id,
           ISSUE_TITLE: issue.title,
           BRANCH: issue.branch,
         },
@@ -131,7 +131,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   for (const [i, outcome] of settled.entries()) {
     if (outcome.status === "rejected") {
       console.error(
-        `  ✗ #${issues[i]!.number} (${issues[i]!.branch}) failed: ${outcome.reason}`,
+        `  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`,
       );
     }
   }
@@ -180,19 +180,18 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   await sandcastle.run({
     hooks,
-    copyToSandbox,
     sandbox: docker(),
     name: "merger",
-    maxIterations: 10,
+    maxIterations: 1,
     // Sonnet is sufficient for merge conflict resolution.
     agent: sandcastle.claudeCode("claude-sonnet-4-6"),
     promptFile: "./.sandcastle/merge-prompt.md",
     promptArgs: {
       // A markdown list of branch names, one per line.
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
-      // A markdown list of issue numbers and titles, one per line.
+      // A markdown list of issue IDs and titles, one per line.
       ISSUES: completedIssues
-        .map((i) => `- #${i.number}: ${i.title}`)
+        .map((i) => `- ${i.id}: ${i.title}`)
         .join("\n"),
     },
   });

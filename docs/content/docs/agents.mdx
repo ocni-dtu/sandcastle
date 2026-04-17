@@ -24,6 +24,16 @@ Required environment variables:
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `GH_TOKEN` | GitHub personal access token |
 
+### OpenCode
+
+Uses OpenCode as the AI coding agent. OpenCode output is passed through as raw stdout (no JSON parsing).
+
+Required environment variables:
+
+| Variable | Description |
+| --- | --- |
+| `GH_TOKEN` | GitHub personal access token |
+
 ## Custom Providers
 
 Agent providers are swappable. To add support for a different AI coding tool, create a new provider that implements the agent provider interface with its own env manifest, env check, and Dockerfile template.

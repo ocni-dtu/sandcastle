@@ -30,8 +30,53 @@ export const makeLocalSandboxLayer = (
   const env = { ...process.env, ...gitEnv };
 
   return Layer.succeed(Sandbox, {
-    exec: (command, options) =>
-      Effect.async<ExecResult, ExecError>((resume) => {
+    exec: (command, options) => {
+      if (options?.onLine) {
+        const onLine = options.onLine;
+        return Effect.async<ExecResult, ExecError>((resume) => {
+          const proc = spawn("sh", ["-c", command], {
+            cwd: options?.cwd ?? sandboxDir,
+            stdio: ["ignore", "pipe", "pipe"],
+            env,
+          });
+
+          const stdoutChunks: string[] = [];
+          const stderrChunks: string[] = [];
+
+          const rl = createInterface({ input: proc.stdout! });
+          rl.on("line", (line) => {
+            stdoutChunks.push(line);
+            onLine(line);
+          });
+
+          proc.stderr!.on("data", (chunk: Buffer) => {
+            stderrChunks.push(chunk.toString());
+          });
+
+          proc.on("error", (error) => {
+            resume(
+              Effect.fail(
+                new ExecError({
+                  command,
+                  message: `Failed to exec: ${error.message}`,
+                }),
+              ),
+            );
+          });
+
+          proc.on("close", (code) => {
+            resume(
+              Effect.succeed({
+                stdout: stdoutChunks.join("\n"),
+                stderr: stderrChunks.join(""),
+                exitCode: code ?? 0,
+              }),
+            );
+          });
+        });
+      }
+
+      return Effect.async<ExecResult, ExecError>((resume) => {
         execFile(
           "sh",
           ["-c", command],
@@ -64,50 +109,8 @@ export const makeLocalSandboxLayer = (
             }
           },
         );
-      }),
-
-    execStreaming: (command, onStdoutLine, options) =>
-      Effect.async<ExecResult, ExecError>((resume) => {
-        const proc = spawn("sh", ["-c", command], {
-          cwd: options?.cwd ?? sandboxDir,
-          stdio: ["ignore", "pipe", "pipe"],
-          env,
-        });
-
-        const stdoutChunks: string[] = [];
-        const stderrChunks: string[] = [];
-
-        const rl = createInterface({ input: proc.stdout! });
-        rl.on("line", (line) => {
-          stdoutChunks.push(line);
-          onStdoutLine(line);
-        });
-
-        proc.stderr!.on("data", (chunk: Buffer) => {
-          stderrChunks.push(chunk.toString());
-        });
-
-        proc.on("error", (error) => {
-          resume(
-            Effect.fail(
-              new ExecError({
-                command,
-                message: `Failed to exec: ${error.message}`,
-              }),
-            ),
-          );
-        });
-
-        proc.on("close", (code) => {
-          resume(
-            Effect.succeed({
-              stdout: stdoutChunks.join("\n"),
-              stderr: stderrChunks.join(""),
-              exitCode: code ?? 0,
-            }),
-          );
-        });
-      }),
+      });
+    },
 
     copyIn: (hostPath, sandboxPath) =>
       Effect.tryPromise({
@@ -121,7 +124,7 @@ export const makeLocalSandboxLayer = (
           }),
       }),
 
-    copyOut: (sandboxPath, hostPath) =>
+    copyFileOut: (sandboxPath, hostPath) =>
       Effect.tryPromise({
         try: async () => {
           await mkdir(dirname(hostPath), { recursive: true });

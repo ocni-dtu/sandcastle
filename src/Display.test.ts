@@ -194,7 +194,7 @@ describe("FileDisplay", () => {
 
   const readLog = (logPath: string) => readFileSync(logPath, "utf-8");
 
-  it("intro is a no-op", async () => {
+  it("intro is a no-op (only delimiter in log)", async () => {
     const { logPath, layer } = setup();
 
     await Effect.runPromise(
@@ -205,7 +205,7 @@ describe("FileDisplay", () => {
     );
 
     const log = readLog(logPath);
-    expect(log).toBe("");
+    expect(log).toMatch(/^\n--- Run started: .+ ---\n$/);
   });
 
   it("writes status messages to file", async () => {
@@ -328,7 +328,7 @@ describe("FileDisplay", () => {
     expect(log).toContain("Some agent output here");
   });
 
-  it("creates an empty log file on initialization", async () => {
+  it("creates log file with run delimiter on initialization", async () => {
     const { logPath, layer } = setup();
 
     await Effect.runPromise(
@@ -339,7 +339,7 @@ describe("FileDisplay", () => {
     );
 
     const log = readLog(logPath);
-    expect(log).toBe("");
+    expect(log).toMatch(/^\n--- Run started: .+ ---\n$/);
   });
 
   it("strips [Name] prefix from status messages", async () => {
@@ -374,6 +374,61 @@ describe("FileDisplay", () => {
 
     const log = readLog(logPath);
     expect(log).not.toContain("\u001b[");
+  });
+
+  it("appends a run delimiter on initialization instead of truncating", async () => {
+    const { logPath, layer } = setup();
+
+    // First run: write some content
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.text("first run output");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const logAfterFirstRun = readLog(logPath);
+    expect(logAfterFirstRun).toContain("--- Run started:");
+    expect(logAfterFirstRun).toContain("first run output");
+
+    // Second run: create a new layer on the same path
+    const layer2 = Layer.provide(
+      FileDisplay.layer(logPath),
+      NodeFileSystem.layer,
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.text("second run output");
+      }).pipe(Effect.provide(layer2)),
+    );
+
+    const logAfterSecondRun = readLog(logPath);
+    // Previous content must be preserved
+    expect(logAfterSecondRun).toContain("first run output");
+    expect(logAfterSecondRun).toContain("second run output");
+    // Two run delimiters
+    const delimiterMatches = logAfterSecondRun.match(
+      /--- Run started: .+ ---/g,
+    );
+    expect(delimiterMatches).toHaveLength(2);
+  });
+
+  it("writes run delimiter with ISO 8601 UTC timestamp", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.intro("sandcastle");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toMatch(
+      /--- Run started: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z ---/,
+    );
   });
 
   it("writes summary without ANSI escape codes", async () => {

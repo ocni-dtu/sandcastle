@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,12 +29,12 @@ describe("testIsolated()", () => {
     }
   });
 
-  it("exec runs in workspacePath by default", async () => {
+  it("exec runs in worktreePath by default", async () => {
     const provider = testIsolated();
     const handle = await provider.create({ env: {} });
     try {
       const result = await handle.exec("pwd");
-      expect(result.stdout.trim()).toBe(handle.workspacePath);
+      expect(result.stdout.trim()).toBe(handle.worktreePath);
     } finally {
       await handle.close();
     }
@@ -66,7 +72,7 @@ describe("testIsolated()", () => {
       writeFileSync(hostFile, "hello from host");
 
       // Copy it into the sandbox
-      const sandboxFile = join(handle.workspacePath, "input.txt");
+      const sandboxFile = join(handle.worktreePath, "input.txt");
       await handle.copyIn(hostFile, sandboxFile);
 
       // Verify it exists inside the sandbox
@@ -77,7 +83,7 @@ describe("testIsolated()", () => {
     }
   });
 
-  it("can copyOut a file from sandbox to host", async () => {
+  it("can copyFileOut a file from sandbox to host", async () => {
     const provider = testIsolated();
     const handle = await provider.create({ env: {} });
     try {
@@ -87,8 +93,8 @@ describe("testIsolated()", () => {
       // Copy it out to the host
       const hostDir = mkdtempSync(join(tmpdir(), "test-host-"));
       const hostFile = join(hostDir, "output.txt");
-      const sandboxFile = join(handle.workspacePath, "output.txt");
-      await handle.copyOut(sandboxFile, hostFile);
+      const sandboxFile = join(handle.worktreePath, "output.txt");
+      await handle.copyFileOut(sandboxFile, hostFile);
 
       // Verify it exists on the host
       const content = readFileSync(hostFile, "utf-8");
@@ -98,28 +104,53 @@ describe("testIsolated()", () => {
     }
   });
 
+  it("can copyIn a directory recursively from host to sandbox", async () => {
+    const provider = testIsolated();
+    const handle = await provider.create({ env: {} });
+    try {
+      // Create a directory tree on the "host"
+      const hostDir = mkdtempSync(join(tmpdir(), "test-host-"));
+      const srcDir = join(hostDir, "mydir");
+      mkdirSync(join(srcDir, "sub"), { recursive: true });
+      writeFileSync(join(srcDir, "a.txt"), "file-a");
+      writeFileSync(join(srcDir, "sub", "b.txt"), "file-b");
+
+      // Copy directory into sandbox
+      const sandboxDir = join(handle.worktreePath, "mydir");
+      await handle.copyIn(srcDir, sandboxDir);
+
+      // Verify both files exist
+      const resultA = await handle.exec("cat mydir/a.txt");
+      expect(resultA.stdout.trim()).toBe("file-a");
+      const resultB = await handle.exec("cat mydir/sub/b.txt");
+      expect(resultB.stdout.trim()).toBe("file-b");
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("close cleans up the temp directory", async () => {
     const provider = testIsolated();
     const handle = await provider.create({ env: {} });
-    const workspacePath = handle.workspacePath;
+    const worktreePath = handle.worktreePath;
 
-    // Workspace should exist before close
-    expect(existsSync(workspacePath)).toBe(true);
+    // Worktree should exist before close
+    expect(existsSync(worktreePath)).toBe(true);
 
     await handle.close();
 
-    // Workspace should be gone after close
-    expect(existsSync(workspacePath)).toBe(false);
+    // Worktree should be gone after close
+    expect(existsSync(worktreePath)).toBe(false);
   });
 
-  it("execStreaming streams lines to callback", async () => {
+  it("exec streams lines to onLine callback", async () => {
     const provider = testIsolated();
     const handle = await provider.create({ env: {} });
     try {
       const lines: string[] = [];
-      const result = await handle.execStreaming(
+      const result = await handle.exec(
         'echo "line1"; echo "line2"; echo "line3"',
-        (line) => lines.push(line),
+        { onLine: (line) => lines.push(line) },
       );
 
       expect(lines).toEqual(["line1", "line2", "line3"]);

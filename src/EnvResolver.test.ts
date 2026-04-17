@@ -134,6 +134,54 @@ describe("resolveEnv", () => {
     });
   });
 
+  it("strips matching double quotes from values", async () => {
+    const dir = await makeDir();
+    await mkdir(join(dir, ".sandcastle"));
+    await writeFile(
+      join(dir, ".sandcastle", ".env"),
+      'ANTHROPIC_API_KEY="sk-ant-api03-real-key"\n',
+    );
+
+    const env = await runResolveEnv(dir);
+    expect(env["ANTHROPIC_API_KEY"]).toBe("sk-ant-api03-real-key");
+  });
+
+  it("strips matching single quotes from values", async () => {
+    const dir = await makeDir();
+    await mkdir(join(dir, ".sandcastle"));
+    await writeFile(join(dir, ".sandcastle", ".env"), "TOKEN='my-token'\n");
+
+    const env = await runResolveEnv(dir);
+    expect(env["TOKEN"]).toBe("my-token");
+  });
+
+  it("leaves mismatched quotes as-is", async () => {
+    const dir = await makeDir();
+    await mkdir(join(dir, ".sandcastle"));
+    await writeFile(join(dir, ".sandcastle", ".env"), `KEY="value'\n`);
+
+    const env = await runResolveEnv(dir);
+    expect(env["KEY"]).toBe(`"value'`);
+  });
+
+  it("leaves interior quotes as-is", async () => {
+    const dir = await makeDir();
+    await mkdir(join(dir, ".sandcastle"));
+    await writeFile(join(dir, ".sandcastle", ".env"), 'KEY=some"thing\n');
+
+    const env = await runResolveEnv(dir);
+    expect(env["KEY"]).toBe('some"thing');
+  });
+
+  it("handles empty quoted values", async () => {
+    const dir = await makeDir();
+    await mkdir(join(dir, ".sandcastle"));
+    await writeFile(join(dir, ".sandcastle", ".env"), 'KEY=""\n');
+
+    const env = await runResolveEnv(dir);
+    expect(env).toEqual({});
+  });
+
   it("process.env fallback works for keys in .sandcastle/.env too", async () => {
     const dir = await makeDir();
     await mkdir(join(dir, ".sandcastle"));

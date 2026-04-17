@@ -1,12 +1,13 @@
 import { Deferred, Effect } from "effect";
 import { Display } from "./Display.js";
 import { preprocessPrompt } from "./PromptPreprocessor.js";
-import { AgentError, TimeoutError } from "./errors.js";
+import { AgentError, AgentIdleTimeoutError } from "./errors.js";
 import type { SandboxError } from "./errors.js";
 import type { SandboxService } from "./SandboxFactory.js";
 import { SandboxFactory } from "./SandboxFactory.js";
 import { withSandboxLifecycle, type SandboxHooks } from "./SandboxLifecycle.js";
 import type { AgentProvider } from "./AgentProvider.js";
+import { TextDeltaBuffer } from "./TextDeltaBuffer.js";
 
 export type { ParsedStreamEvent } from "./AgentProvider.js";
 
@@ -27,9 +28,8 @@ const invokeAgent = (
     let resultText = "";
 
     // Deferred that will be failed when the idle timer fires
-    const timeoutSignal = yield* Deferred.make<never, TimeoutError>();
+    const timeoutSignal = yield* Deferred.make<never, AgentIdleTimeoutError>();
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    const idleTimeoutSeconds = idleTimeoutMs / 1000;
 
     // Periodic idle warning state
     let warningHandle: ReturnType<typeof setInterval> | null = null;
@@ -50,9 +50,9 @@ const invokeAgent = (
         Effect.runPromise(
           Deferred.fail(
             timeoutSignal,
-            new TimeoutError({
-              message: `Agent idle for ${idleTimeoutSeconds} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
-              idleTimeoutSeconds,
+            new AgentIdleTimeoutError({
+              message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
+              timeoutMs: idleTimeoutMs,
             }),
           ),
         ).catch(() => {});
@@ -64,22 +64,26 @@ const invokeAgent = (
     resetIdleTimer();
 
     const execEffect = Effect.gen(function* () {
-      const execResult = yield* sandbox.execStreaming(
-        provider.buildPrintCommand(prompt),
-        (line) => {
-          for (const parsed of provider.parseStreamLine(line)) {
-            if (parsed.type === "text") {
-              resetIdleTimer();
-              onText(parsed.text);
-            } else if (parsed.type === "result") {
-              resultText = parsed.result;
-            } else if (parsed.type === "tool_call") {
-              resetIdleTimer();
-              onToolCall(parsed.name, parsed.args);
+      const execResult = yield* sandbox.exec(
+        provider.buildPrintCommand({
+          prompt,
+          dangerouslySkipPermissions: true,
+        }),
+        {
+          onLine: (line) => {
+            resetIdleTimer();
+            for (const parsed of provider.parseStreamLine(line)) {
+              if (parsed.type === "text") {
+                onText(parsed.text);
+              } else if (parsed.type === "result") {
+                resultText = parsed.result;
+              } else if (parsed.type === "tool_call") {
+                onToolCall(parsed.name, parsed.args);
+              }
             }
-          }
+          },
+          cwd: sandboxRepoDir,
         },
-        { cwd: sandboxRepoDir },
       );
 
       if (execResult.exitCode !== 0) {
@@ -114,14 +118,13 @@ const DEFAULT_IDLE_TIMEOUT_SECONDS = 10 * 60; // 600 seconds
 
 export interface OrchestrateOptions {
   readonly hostRepoDir: string;
-  readonly sandboxRepoDir: string;
   readonly iterations: number;
   readonly hooks?: SandboxHooks;
   readonly prompt: string;
   readonly branch?: string;
   readonly provider: AgentProvider;
   readonly completionSignal?: string | string[];
-  /** Idle timeout in seconds. If the agent produces no output for this long, it fails with TimeoutError. Default: 600 (10 minutes) */
+  /** Idle timeout in seconds. If the agent produces no output for this long, it fails with AgentIdleTimeoutError. Default: 600 (10 minutes) */
   readonly idleTimeoutSeconds?: number;
   /** Optional name for the run, prepended to status messages as [name] */
   readonly name?: string;
@@ -148,15 +151,8 @@ export const orchestrate = (
   return Effect.gen(function* () {
     const factory = yield* SandboxFactory;
     const display = yield* Display;
-    const {
-      hostRepoDir,
-      sandboxRepoDir,
-      iterations,
-      hooks,
-      prompt,
-      branch,
-      provider,
-    } = options;
+    const { hostRepoDir, iterations, hooks, prompt, branch, provider } =
+      options;
     let completionSignals: string[];
     if (options.completionSignal === undefined) {
       completionSignals = [DEFAULT_COMPLETION_SIGNAL];
@@ -177,64 +173,74 @@ export const orchestrate = (
     for (let i = 1; i <= iterations; i++) {
       yield* display.status(label(`Iteration ${i}/${iterations}`), "info");
 
-      const sandboxResult = yield* factory.withSandbox(({ hostWorktreePath }) =>
-        withSandboxLifecycle(
-          {
-            hostRepoDir,
-            sandboxRepoDir,
-            hooks,
-            branch,
-            hostWorktreePath,
-          },
-          (ctx) =>
-            Effect.gen(function* () {
-              // Preprocess prompt (run !`command` expressions inside sandbox)
-              const fullPrompt = yield* preprocessPrompt(
-                prompt,
-                ctx.sandbox,
-                ctx.sandboxRepoDir,
-              );
+      const sandboxResult = yield* factory.withSandbox(
+        ({ hostWorktreePath, sandboxRepoPath, applyToHost }) =>
+          withSandboxLifecycle(
+            {
+              hostRepoDir,
+              sandboxRepoDir: sandboxRepoPath,
+              hooks,
+              branch,
+              hostWorktreePath,
+              applyToHost,
+            },
+            (ctx) =>
+              Effect.gen(function* () {
+                // Preprocess prompt (run !`command` expressions inside sandbox)
+                const fullPrompt = yield* preprocessPrompt(
+                  prompt,
+                  ctx.sandbox,
+                  ctx.sandboxRepoDir,
+                );
 
-              yield* display.status(label("Agent started"), "success");
+                yield* display.status(label("Agent started"), "success");
 
-              // Invoke the agent
-              const onText = (text: string) => {
-                Effect.runPromise(display.text(text));
-              };
-              const onToolCall = (name: string, formattedArgs: string) => {
-                Effect.runPromise(display.toolCall(name, formattedArgs));
-              };
-              const onIdleWarning = (minutes: number) => {
-                const msg =
-                  minutes === 1
-                    ? "Agent idle for 1 minute"
-                    : `Agent idle for ${minutes} minutes`;
-                Effect.runPromise(display.status(label(msg), "warn"));
-              };
-              const { result: agentOutput } = yield* invokeAgent(
-                ctx.sandbox,
-                ctx.sandboxRepoDir,
-                fullPrompt,
-                provider,
-                idleTimeoutMs,
-                onText,
-                onToolCall,
-                onIdleWarning,
-                options._idleWarningIntervalMs,
-              );
+                // Invoke the agent — buffer text deltas so Pi's single-token
+                // chunks are displayed as readable multi-word lines.
+                const textBuffer = new TextDeltaBuffer((chunk) => {
+                  Effect.runPromise(display.text(chunk));
+                });
+                const onText = (text: string) => {
+                  textBuffer.write(text);
+                };
+                const onToolCall = (name: string, formattedArgs: string) => {
+                  textBuffer.flush();
+                  Effect.runPromise(display.toolCall(name, formattedArgs));
+                };
+                const onIdleWarning = (minutes: number) => {
+                  const msg =
+                    minutes === 1
+                      ? "Agent idle for 1 minute"
+                      : `Agent idle for ${minutes} minutes`;
+                  Effect.runPromise(display.status(label(msg), "warn"));
+                };
+                const { result: agentOutput } = yield* invokeAgent(
+                  ctx.sandbox,
+                  ctx.sandboxRepoDir,
+                  fullPrompt,
+                  provider,
+                  idleTimeoutMs,
+                  onText,
+                  onToolCall,
+                  onIdleWarning,
+                  options._idleWarningIntervalMs,
+                );
 
-              yield* display.status(label("Agent stopped"), "info");
+                // Flush any remaining buffered text deltas
+                textBuffer.dispose();
 
-              // Check completion signal
-              const matchedSignal = completionSignals.find((sig) =>
-                agentOutput.includes(sig),
-              );
-              return {
-                completionSignal: matchedSignal,
-                stdout: agentOutput,
-              } as const;
-            }),
-        ),
+                yield* display.status(label("Agent stopped"), "info");
+
+                // Check completion signal
+                const matchedSignal = completionSignals.find((sig) =>
+                  agentOutput.includes(sig),
+                );
+                return {
+                  completionSignal: matchedSignal,
+                  stdout: agentOutput,
+                } as const;
+              }),
+          ),
       );
 
       const lifecycleResult = sandboxResult.value;

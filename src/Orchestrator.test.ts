@@ -18,7 +18,7 @@ import {
 } from "./AgentProvider.js";
 import { Sandbox } from "./SandboxFactory.js";
 import type { DockerError, SandboxError } from "./errors.js";
-import { TimeoutError } from "./errors.js";
+import { AgentIdleTimeoutError } from "./errors.js";
 import { SandboxFactory } from "./SandboxFactory.js";
 
 const execAsync = promisify(exec);
@@ -73,7 +73,7 @@ const toStreamJson = (output: string): string => {
  *
  * @param hostRepoDir - The host git repository to create worktrees from
  * @param buildLayer - Given a fresh sandbox dir, return a Sandbox layer
- * @returns The factory layer and the sandboxRepoDir path to pass to orchestrate
+ * @returns The factory layer
  */
 const makeTestSandboxFactory = (
   hostRepoDir: string,
@@ -107,9 +107,15 @@ const makeTestSandboxFactory = (
         }),
         // Use: provide sandbox layer and run effect
         (_branchName) =>
-          makeEffect({ hostWorktreePath: sandboxBaseDir }).pipe(
-            Effect.provide(buildLayer(sandboxBaseDir)),
-          ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
+          makeEffect({
+            hostWorktreePath: sandboxBaseDir,
+            sandboxRepoPath: sandboxBaseDir,
+            applyToHost: () => Effect.void,
+          }).pipe(Effect.provide(buildLayer(sandboxBaseDir))) as Effect.Effect<
+            A,
+            E | DockerError,
+            Exclude<R, Sandbox>
+          >,
         // Release: remove the worktree (branch cleanup is handled by withSandboxLifecycle)
         (_branchName) =>
           Effect.promise(async () => {
@@ -143,6 +149,19 @@ const makeMockAgentLayer = (
     exec: (command, options) => {
       // Intercept claude invocations
       if (command.startsWith("claude ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toStreamJson(output);
+            // Emit each line to the callback
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -154,32 +173,13 @@ const makeMockAgentLayer = (
         real.exec(command, options),
       ).pipe(Effect.provide(fsLayer));
     },
-    execStreaming: (command, onStdoutLine, options) => {
-      // Intercept claude invocations
-      if (command.startsWith("claude ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toStreamJson(output);
-          // Emit each line to the callback
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      // Pass through to real filesystem sandbox
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
     copyIn: (hostPath, sandboxPath) =>
       Effect.flatMap(Sandbox, (real) =>
         real.copyIn(hostPath, sandboxPath),
       ).pipe(Effect.provide(fsLayer)),
-    copyOut: (sandboxPath, hostPath) =>
+    copyFileOut: (sandboxPath, hostPath) =>
       Effect.flatMap(Sandbox, (real) =>
-        real.copyOut(sandboxPath, hostPath),
+        real.copyFileOut(sandboxPath, hostPath),
       ).pipe(Effect.provide(fsLayer)),
   });
 };
@@ -213,7 +213,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
 
         prompt: "do some work",
@@ -247,7 +247,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
 
         prompt: "do some work",
@@ -277,7 +277,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
         completionSignal: "TASK_FINISHED",
@@ -307,7 +307,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 2,
         prompt: "do some work",
         completionSignal: "TASK_FINISHED",
@@ -338,7 +338,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
         completionSignal: ["TASK_FINISHED", "TASK_ABORTED"],
@@ -368,7 +368,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
         completionSignal: ["TASK_FINISHED", "TASK_ABORTED"],
@@ -398,7 +398,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 2,
         prompt: "do some work",
         completionSignal: ["TASK_FINISHED", "TASK_ABORTED"],
@@ -451,7 +451,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
 
         prompt: "do some work",
@@ -487,7 +487,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 2,
 
         prompt: "do some work",
@@ -532,7 +532,7 @@ describe("Orchestrator", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 3,
 
         prompt: "test isolation",
@@ -565,7 +565,7 @@ describe("OrchestrateResult", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -613,7 +613,7 @@ describe("OrchestrateResult", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -647,7 +647,7 @@ describe("OrchestrateResult", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -682,7 +682,7 @@ describe("OrchestrateResult", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -731,7 +731,11 @@ describe("OrchestrateResult", () => {
             return branchName;
           }),
           (_branchName) =>
-            makeEffect({ hostWorktreePath: sandboxBaseDir }).pipe(
+            makeEffect({
+              hostWorktreePath: sandboxBaseDir,
+              sandboxRepoPath: sandboxBaseDir,
+              applyToHost: () => Effect.void,
+            }).pipe(
               Effect.provide(
                 makeMockAgentLayer(sandboxBaseDir, async (repoDir) => {
                   // Make a commit
@@ -781,7 +785,6 @@ describe("OrchestrateResult", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir: sandboxBaseDir,
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -1024,12 +1027,9 @@ describe("Orchestrator tool call display integration", () => {
     const mockLayer = makeTestSandboxFactory(hostDir, (dir) => {
       const fsLayer = makeLocalSandboxLayer(dir);
       return Layer.succeed(Sandbox, {
-        exec: (command, options) =>
-          Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-            Effect.provide(fsLayer),
-          ),
-        execStreaming: (command, onStdoutLine, options) => {
-          if (command.startsWith("claude ")) {
+        exec: (command, options) => {
+          if (command.startsWith("claude ") && options?.onLine) {
+            const onLine = options.onLine;
             const lines = [
               JSON.stringify({
                 type: "assistant",
@@ -1060,7 +1060,7 @@ describe("Orchestrator tool call display integration", () => {
                 result: "<promise>COMPLETE</promise>",
               }),
             ];
-            for (const line of lines) onStdoutLine(line);
+            for (const line of lines) onLine(line);
             return Effect.succeed({
               stdout: lines.join("\n"),
               stderr: "",
@@ -1068,16 +1068,16 @@ describe("Orchestrator tool call display integration", () => {
             });
           }
           return Effect.flatMap(Sandbox, (real) =>
-            real.execStreaming(command, onStdoutLine, options),
+            real.exec(command, options),
           ).pipe(Effect.provide(fsLayer));
         },
         copyIn: (hostPath, sandboxPath) =>
           Effect.flatMap(Sandbox, (real) =>
             real.copyIn(hostPath, sandboxPath),
           ).pipe(Effect.provide(fsLayer)),
-        copyOut: (sandboxPath, hostPath) =>
+        copyFileOut: (sandboxPath, hostPath) =>
           Effect.flatMap(Sandbox, (real) =>
-            real.copyOut(sandboxPath, hostPath),
+            real.copyFileOut(sandboxPath, hostPath),
           ).pipe(Effect.provide(fsLayer)),
       });
     });
@@ -1086,7 +1086,6 @@ describe("Orchestrator tool call display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir: mockLayer.sandboxRepoDir,
         iterations: 1,
         prompt: "do some work",
       }).pipe(
@@ -1128,12 +1127,8 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
               return Effect.succeed({
                 stdout: "",
                 stderr: "Agent crashed",
@@ -1141,16 +1136,16 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1160,7 +1155,7 @@ describe("Orchestrator error handling", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
 
         prompt: "do some work",
@@ -1183,18 +1178,15 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               // Only emit an assistant line, no result line
               const assistantLine = JSON.stringify({
                 type: "assistant",
                 message: { content: [{ type: "text", text: "working..." }] },
               });
-              onStdoutLine(assistantLine);
+              onLine(assistantLine);
               return Effect.succeed({
                 stdout: "All done. <promise>COMPLETE</promise>",
                 stderr: "",
@@ -1202,16 +1194,16 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1221,7 +1213,7 @@ describe("Orchestrator error handling", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
 
         prompt: "do some work",
@@ -1247,12 +1239,9 @@ describe("Orchestrator error handling", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               callCount++;
               if (callCount === 1) {
                 // Iteration 1: make a commit
@@ -1272,7 +1261,7 @@ describe("Orchestrator error handling", () => {
                   const output = "Finished iteration 1.";
                   const streamOutput = toStreamJson(output);
                   for (const line of streamOutput.split("\n")) {
-                    onStdoutLine(line);
+                    onLine(line);
                   }
                   return { stdout: streamOutput, stderr: "", exitCode: 0 };
                 });
@@ -1285,16 +1274,16 @@ describe("Orchestrator error handling", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1304,7 +1293,7 @@ describe("Orchestrator error handling", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 3,
 
         prompt: "do some work",
@@ -1329,7 +1318,7 @@ describe("Orchestrator error handling", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: "/nonexistent/repo",
-        sandboxRepoDir,
+
         iterations: 1,
 
         prompt: "do some work",
@@ -1363,17 +1352,13 @@ describe("Orchestrator error handling", () => {
               real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
-          execStreaming: (command, onStdoutLine, options) =>
-            Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
-            ).pipe(Effect.provide(fsLayer)),
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1383,7 +1368,7 @@ describe("Orchestrator error handling", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
 
         prompt: "do some work",
@@ -1408,17 +1393,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Test output";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1427,16 +1409,16 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1446,7 +1428,7 @@ describe("Orchestrator streaming", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
 
         prompt: "do some work",
@@ -1477,7 +1459,7 @@ describe("Orchestrator streaming", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
 
         prompt: "do some work",
@@ -1501,17 +1483,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1520,16 +1499,16 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1539,7 +1518,7 @@ describe("Orchestrator streaming", () => {
       orchestrate({
         provider: claudeCode(DEFAULT_MODEL),
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -1561,17 +1540,14 @@ describe("Orchestrator streaming", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedCommand = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1580,16 +1556,16 @@ describe("Orchestrator streaming", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1599,7 +1575,7 @@ describe("Orchestrator streaming", () => {
       orchestrate({
         provider: claudeCode("claude-sonnet-4-6"),
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -1624,18 +1600,15 @@ describe("Orchestrator prompt preprocessing", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               // Capture the prompt passed to claude
               capturedPrompt = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1644,16 +1617,16 @@ describe("Orchestrator prompt preprocessing", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1663,7 +1636,7 @@ describe("Orchestrator prompt preprocessing", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "Context: !`echo hello-from-sandbox`\n\nDo the work.",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -1696,17 +1669,14 @@ describe("Orchestrator prompt preprocessing", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               capturedPrompt = command;
               const output = "Done.";
               const streamOutput = toStreamJson(output);
               for (const line of streamOutput.split("\n")) {
-                onStdoutLine(line);
+                onLine(line);
               }
               return Effect.succeed({
                 stdout: streamOutput,
@@ -1715,16 +1685,16 @@ describe("Orchestrator prompt preprocessing", () => {
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -1734,7 +1704,6 @@ describe("Orchestrator prompt preprocessing", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir: sr2,
         iterations: 1,
         prompt: "Just a plain prompt with no commands.",
       }).pipe(Effect.provide(Layer.merge(fl2, testDisplayLayer))),
@@ -1766,7 +1735,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
@@ -1829,7 +1798,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 2,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
@@ -1867,7 +1836,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "test",
         // No idleTimeoutSeconds — should default to 10 minutes (600s)
@@ -1902,7 +1871,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
         name: "issue-42",
@@ -1943,7 +1912,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
@@ -1956,7 +1925,7 @@ describe("Orchestrator Display integration", () => {
     expect(statusEntries.every((e) => !e.message.startsWith("["))).toBe(true);
   });
 
-  it("fails with TimeoutError when idleTimeoutSeconds is exceeded with no output", async () => {
+  it("fails with AgentIdleTimeoutError when idleTimeoutSeconds is exceeded with no output", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-timeout-"));
 
     await initRepo(hostDir);
@@ -1976,7 +1945,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "test",
         idleTimeoutSeconds: 0.1, // 100ms — well below the 2s agent delay with no output
@@ -1989,9 +1958,9 @@ describe("Orchestrator Display integration", () => {
     expect(exitResult._tag).toBe("Failure");
     if (exitResult._tag === "Failure") {
       const err = Cause.squash(exitResult.cause);
-      expect(err).toBeInstanceOf(TimeoutError);
-      if (err instanceof TimeoutError) {
-        expect(err.idleTimeoutSeconds).toBe(0.1);
+      expect(err).toBeInstanceOf(AgentIdleTimeoutError);
+      if (err instanceof AgentIdleTimeoutError) {
+        expect(err.timeoutMs).toBe(100);
         expect(err.message).toContain("idle");
         expect(err.message).toContain("--idle-timeout");
       }
@@ -2013,18 +1982,15 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Wait 100ms then emit a text event (resets idle timer)
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine(
+                onLine(
                   JSON.stringify({
                     type: "assistant",
                     message: {
@@ -2036,23 +2002,21 @@ describe("Orchestrator Display integration", () => {
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 100)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -2062,7 +2026,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "test",
         idleTimeoutSeconds: 0.15, // 150ms — timer resets on text at t=100ms
@@ -2073,6 +2037,73 @@ describe("Orchestrator Display integration", () => {
     );
 
     // Should succeed because the text event at t=100ms resets the idle timer
+    expect(exitResult._tag).toBe("Success");
+  }, 10_000);
+
+  it("resets the idle timer on unparsed stdout lines (no structured events)", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-idle-raw-"));
+
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    // Mock agent: emits raw (non-JSON) stdout lines that don't parse into any
+    // structured event, then completes. With idleTimeoutSeconds=0.15 (150ms),
+    // the timer would fire at t=150ms if only parsed events reset it.
+    // The raw line at t=100ms should reset the timer to t=250ms, allowing
+    // the run to complete at t=200ms.
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory(
+      hostDir,
+      (dir) => {
+        const fsLayer = makeLocalSandboxLayer(dir);
+        return Layer.succeed(Sandbox, {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
+              return Effect.gen(function* () {
+                // Wait 100ms then emit a raw, unparsable line (should still reset idle timer)
+                yield* Effect.promise(
+                  () => new Promise((resolve) => setTimeout(resolve, 100)),
+                );
+                onLine("raw TUI output: rendering panel...");
+                // Wait another 100ms then emit the result so the run completes
+                yield* Effect.promise(
+                  () => new Promise((resolve) => setTimeout(resolve, 100)),
+                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
+                return { stdout: "", stderr: "", exitCode: 0 };
+              });
+            }
+            return Effect.flatMap(Sandbox, (real) =>
+              real.exec(command, options),
+            ).pipe(Effect.provide(fsLayer));
+          },
+          copyIn: (hostPath, sandboxPath) =>
+            Effect.flatMap(Sandbox, (real) =>
+              real.copyIn(hostPath, sandboxPath),
+            ).pipe(Effect.provide(fsLayer)),
+          copyFileOut: (sandboxPath, hostPath) =>
+            Effect.flatMap(Sandbox, (real) =>
+              real.copyFileOut(sandboxPath, hostPath),
+            ).pipe(Effect.provide(fsLayer)),
+        });
+      },
+    );
+
+    const exitResult = await Effect.runPromise(
+      orchestrate({
+        provider: testProvider,
+        hostRepoDir: hostDir,
+
+        iterations: 1,
+        prompt: "test",
+        idleTimeoutSeconds: 0.15, // 150ms — should be reset by raw stdout at t=100ms
+      }).pipe(
+        Effect.provide(Layer.merge(factoryLayer, testDisplayLayer)),
+        Effect.exit,
+      ),
+    );
+
+    // Should succeed because the raw stdout line at t=100ms resets the idle timer
     expect(exitResult._tag).toBe("Success");
   }, 10_000);
 
@@ -2089,34 +2120,29 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Stay idle for 250ms — enough for ~2 warnings at 100ms interval
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 250)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -2129,7 +2155,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "test",
         idleTimeoutSeconds: 10, // high enough not to kill
@@ -2172,19 +2198,16 @@ describe("Orchestrator Display integration", () => {
       (dir) => {
         const fsLayer = makeLocalSandboxLayer(dir);
         return Layer.succeed(Sandbox, {
-          exec: (command, options) =>
-            Effect.flatMap(Sandbox, (real) => real.exec(command, options)).pipe(
-              Effect.provide(fsLayer),
-            ),
-          execStreaming: (command, onStdoutLine, options) => {
-            if (command.startsWith("claude ")) {
+          exec: (command, options) => {
+            if (command.startsWith("claude ") && options?.onLine) {
+              const onLine = options.onLine;
               return Effect.gen(function* () {
                 // Idle for 150ms — warning fires at ~100ms
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 150)),
                 );
                 // Emit text — should reset the warning counter
-                onStdoutLine(
+                onLine(
                   JSON.stringify({
                     type: "assistant",
                     message: {
@@ -2196,23 +2219,21 @@ describe("Orchestrator Display integration", () => {
                 yield* Effect.promise(
                   () => new Promise((resolve) => setTimeout(resolve, 150)),
                 );
-                onStdoutLine(
-                  JSON.stringify({ type: "result", result: "done" }),
-                );
+                onLine(JSON.stringify({ type: "result", result: "done" }));
                 return { stdout: "", stderr: "", exitCode: 0 };
               });
             }
             return Effect.flatMap(Sandbox, (real) =>
-              real.execStreaming(command, onStdoutLine, options),
+              real.exec(command, options),
             ).pipe(Effect.provide(fsLayer));
           },
           copyIn: (hostPath, sandboxPath) =>
             Effect.flatMap(Sandbox, (real) =>
               real.copyIn(hostPath, sandboxPath),
             ).pipe(Effect.provide(fsLayer)),
-          copyOut: (sandboxPath, hostPath) =>
+          copyFileOut: (sandboxPath, hostPath) =>
             Effect.flatMap(Sandbox, (real) =>
-              real.copyOut(sandboxPath, hostPath),
+              real.copyFileOut(sandboxPath, hostPath),
             ).pipe(Effect.provide(fsLayer)),
         });
       },
@@ -2225,7 +2246,7 @@ describe("Orchestrator Display integration", () => {
       orchestrate({
         provider: testProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "test",
         idleTimeoutSeconds: 10,
@@ -2297,6 +2318,18 @@ const makeMockPiAgentLayer = (
   return Layer.succeed(Sandbox, {
     exec: (command, options) => {
       if (command.startsWith("pi ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toPiStreamJson(output);
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -2307,29 +2340,13 @@ const makeMockPiAgentLayer = (
         real.exec(command, options),
       ).pipe(Effect.provide(fsLayer));
     },
-    execStreaming: (command, onStdoutLine, options) => {
-      if (command.startsWith("pi ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toPiStreamJson(output);
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
     copyIn: (hostPath, sandboxPath) =>
       Effect.flatMap(Sandbox, (real) =>
         real.copyIn(hostPath, sandboxPath),
       ).pipe(Effect.provide(fsLayer)),
-    copyOut: (sandboxPath, hostPath) =>
+    copyFileOut: (sandboxPath, hostPath) =>
       Effect.flatMap(Sandbox, (real) =>
-        real.copyOut(sandboxPath, hostPath),
+        real.copyFileOut(sandboxPath, hostPath),
       ).pipe(Effect.provide(fsLayer)),
   });
 };
@@ -2361,7 +2378,7 @@ describe("Orchestrator with pi provider", () => {
       orchestrate({
         provider: piTestProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -2389,7 +2406,7 @@ describe("Orchestrator with pi provider", () => {
       orchestrate({
         provider: piTestProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -2397,6 +2414,191 @@ describe("Orchestrator with pi provider", () => {
 
     expect(result.iterationsRun).toBe(1);
     expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
+  });
+
+  it("buffers small pi text deltas into larger display chunks", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-buf-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    // Build a mock that streams many tiny text_delta events (one per word),
+    // mimicking Pi's real streaming behavior.
+    const words = [
+      "Hello",
+      " ",
+      "world",
+      ".",
+      " ",
+      "This",
+      " ",
+      "is",
+      " ",
+      "a",
+      " ",
+      "test",
+      ".\n",
+    ];
+    const agentResult = "Hello world. This is a test.";
+    const streamLines: string[] = [];
+    for (const word of words) {
+      streamLines.push(
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: word },
+        }),
+      );
+    }
+    streamLines.push(
+      JSON.stringify({
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: agentResult }] },
+        ],
+      }),
+    );
+
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(ref);
+
+    const fsLayer = makeLocalSandboxLayer(hostDir);
+    const mockLayer = Layer.succeed(Sandbox, {
+      exec: (command, options) => {
+        if (command.startsWith("pi ") && options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.sync(() => {
+            for (const line of streamLines) {
+              onLine(line);
+            }
+            return { stdout: streamLines.join("\n"), stderr: "", exitCode: 0 };
+          });
+        }
+        return Effect.flatMap(Sandbox, (real) =>
+          real.exec(command, options),
+        ).pipe(Effect.provide(fsLayer));
+      },
+      copyIn: (hostPath, sandboxPath) =>
+        Effect.flatMap(Sandbox, (real) =>
+          real.copyIn(hostPath, sandboxPath),
+        ).pipe(Effect.provide(fsLayer)),
+      copyFileOut: (sandboxPath, hostPath) =>
+        Effect.flatMap(Sandbox, (real) =>
+          real.copyFileOut(sandboxPath, hostPath),
+        ).pipe(Effect.provide(fsLayer)),
+    });
+
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory(
+      hostDir,
+      () => mockLayer,
+    );
+
+    await Effect.runPromise(
+      orchestrate({
+        provider: piTestProvider,
+        hostRepoDir: hostDir,
+
+        iterations: 1,
+        prompt: "do some work",
+      }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
+    );
+
+    const entries = await Effect.runPromise(Ref.get(ref));
+    const textEntries = entries.filter(
+      (e): e is DisplayEntry & { _tag: "text" } => e._tag === "text",
+    );
+
+    // 13 individual text_delta events were streamed, but buffering should
+    // produce far fewer display entries. The exact count depends on heuristics
+    // (sentence boundary, newline, length threshold), but it must be less than 13.
+    expect(textEntries.length).toBeLessThan(words.length);
+    expect(textEntries.length).toBeGreaterThan(0);
+
+    // All text must be preserved — concatenation of display entries equals original
+    const displayedText = textEntries.map((e) => e.message).join("");
+    expect(displayedText).toBe(words.join(""));
+  });
+
+  it("flushes buffered text before tool call display", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-tool-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    // Stream text deltas followed by a tool_execution_start
+    const streamLines = [
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "thinking" },
+      }),
+      JSON.stringify({
+        type: "tool_execution_start",
+        toolName: "Bash",
+        args: { command: "ls" },
+      }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "done" }] },
+        ],
+      }),
+    ];
+
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(ref);
+
+    const fsLayer = makeLocalSandboxLayer(hostDir);
+    const mockLayer = Layer.succeed(Sandbox, {
+      exec: (command, options) => {
+        if (command.startsWith("pi ") && options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.sync(() => {
+            for (const line of streamLines) {
+              onLine(line);
+            }
+            return { stdout: streamLines.join("\n"), stderr: "", exitCode: 0 };
+          });
+        }
+        return Effect.flatMap(Sandbox, (real) =>
+          real.exec(command, options),
+        ).pipe(Effect.provide(fsLayer));
+      },
+      copyIn: (hostPath, sandboxPath) =>
+        Effect.flatMap(Sandbox, (real) =>
+          real.copyIn(hostPath, sandboxPath),
+        ).pipe(Effect.provide(fsLayer)),
+      copyFileOut: (sandboxPath, hostPath) =>
+        Effect.flatMap(Sandbox, (real) =>
+          real.copyFileOut(sandboxPath, hostPath),
+        ).pipe(Effect.provide(fsLayer)),
+    });
+
+    const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory(
+      hostDir,
+      () => mockLayer,
+    );
+
+    await Effect.runPromise(
+      orchestrate({
+        provider: piTestProvider,
+        hostRepoDir: hostDir,
+
+        iterations: 1,
+        prompt: "do some work",
+      }).pipe(Effect.provide(Layer.merge(factoryLayer, displayLayer))),
+    );
+
+    const entries = await Effect.runPromise(Ref.get(ref));
+
+    // Find the text and toolCall entries
+    const relevantEntries = entries.filter(
+      (e) => e._tag === "text" || e._tag === "toolCall",
+    );
+
+    // Text "thinking" must appear BEFORE the tool call
+    const textIdx = relevantEntries.findIndex(
+      (e) => e._tag === "text" && e.message === "thinking",
+    );
+    const toolIdx = relevantEntries.findIndex((e) => e._tag === "toolCall");
+    expect(textIdx).toBeGreaterThanOrEqual(0);
+    expect(toolIdx).toBeGreaterThan(textIdx);
   });
 });
 
@@ -2431,6 +2633,18 @@ const makeMockCodexAgentLayer = (
   return Layer.succeed(Sandbox, {
     exec: (command, options) => {
       if (command.startsWith("codex ")) {
+        if (options?.onLine) {
+          const onLine = options.onLine;
+          return Effect.gen(function* () {
+            const cwd = options?.cwd ?? sandboxDir;
+            const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
+            const streamOutput = toCodexStreamJson(output);
+            for (const line of streamOutput.split("\n")) {
+              onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          });
+        }
         return Effect.gen(function* () {
           const cwd = options?.cwd ?? sandboxDir;
           const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
@@ -2441,29 +2655,13 @@ const makeMockCodexAgentLayer = (
         real.exec(command, options),
       ).pipe(Effect.provide(fsLayer));
     },
-    execStreaming: (command, onStdoutLine, options) => {
-      if (command.startsWith("codex ")) {
-        return Effect.gen(function* () {
-          const cwd = options?.cwd ?? sandboxDir;
-          const output = yield* Effect.promise(() => mockAgentBehavior(cwd));
-          const streamOutput = toCodexStreamJson(output);
-          for (const line of streamOutput.split("\n")) {
-            onStdoutLine(line);
-          }
-          return { stdout: streamOutput, stderr: "", exitCode: 0 };
-        });
-      }
-      return Effect.flatMap(Sandbox, (real) =>
-        real.execStreaming(command, onStdoutLine, options),
-      ).pipe(Effect.provide(fsLayer));
-    },
     copyIn: (hostPath, sandboxPath) =>
       Effect.flatMap(Sandbox, (real) =>
         real.copyIn(hostPath, sandboxPath),
       ).pipe(Effect.provide(fsLayer)),
-    copyOut: (sandboxPath, hostPath) =>
+    copyFileOut: (sandboxPath, hostPath) =>
       Effect.flatMap(Sandbox, (real) =>
-        real.copyOut(sandboxPath, hostPath),
+        real.copyFileOut(sandboxPath, hostPath),
       ).pipe(Effect.provide(fsLayer)),
   });
 };
@@ -2495,7 +2693,7 @@ describe("Orchestrator with codex provider", () => {
       orchestrate({
         provider: codexTestProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 1,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
@@ -2523,7 +2721,7 @@ describe("Orchestrator with codex provider", () => {
       orchestrate({
         provider: codexTestProvider,
         hostRepoDir: hostDir,
-        sandboxRepoDir,
+
         iterations: 5,
         prompt: "do some work",
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),

@@ -62,10 +62,18 @@ const parseStreamJsonLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
+/** Options passed to buildPrintCommand and buildInteractiveArgs. */
+export interface AgentCommandOptions {
+  readonly prompt: string;
+  readonly dangerouslySkipPermissions: boolean;
+}
+
 export interface AgentProvider {
   readonly name: string;
-  buildPrintCommand(prompt: string): string;
-  buildInteractiveArgs(prompt: string): string[];
+  /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
+  readonly env: Record<string, string>;
+  buildPrintCommand(options: AgentCommandOptions): string;
+  buildInteractiveArgs?(options: AgentCommandOptions): string[];
   parseStreamLine(line: string): ParsedStreamEvent[];
 }
 
@@ -128,15 +136,24 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
-export const pi = (model: string): AgentProvider => ({
-  name: "pi",
+/** Options for the pi agent provider. */
+export interface PiOptions {
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
 
-  buildPrintCommand(prompt: string): string {
+export const pi = (model: string, options?: PiOptions): AgentProvider => ({
+  name: "pi",
+  env: options?.env ?? {},
+
+  buildPrintCommand({ prompt }: AgentCommandOptions): string {
     return `pi -p --mode json --no-session --model ${shellEscape(model)} ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(_prompt: string): string[] {
-    return ["pi", "--model", model];
+  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
+    const args = ["pi", "--model", model];
+    if (prompt) args.push(prompt);
+    return args;
   },
 
   parseStreamLine(line: string): ParsedStreamEvent[] {
@@ -182,19 +199,67 @@ const parseCodexStreamLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
-export const codex = (model: string): AgentProvider => ({
-  name: "codex",
+/** Options for the codex agent provider. */
+export interface CodexOptions {
+  readonly effort?: "low" | "medium" | "high" | "xhigh";
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
 
-  buildPrintCommand(prompt: string): string {
-    return `codex exec --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)} ${shellEscape(prompt)}`;
+export const codex = (
+  model: string,
+  options?: CodexOptions,
+): AgentProvider => ({
+  name: "codex",
+  env: options?.env ?? {},
+
+  buildPrintCommand({ prompt }: AgentCommandOptions): string {
+    const effortFlag = options?.effort
+      ? ` -c ${shellEscape(`model_reasoning_effort="${options.effort}"`)}`
+      : "";
+    return `codex exec --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)}${effortFlag} ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(_prompt: string): string[] {
-    return ["codex", "--model", model];
+  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
+    const args = ["codex", "--model", model];
+    if (prompt) args.push(prompt);
+    return args;
   },
 
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parseCodexStreamLine(line);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode agent provider
+// ---------------------------------------------------------------------------
+
+/** Options for the opencode agent provider. */
+export interface OpenCodeOptions {
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
+
+export const opencode = (
+  model: string,
+  options?: OpenCodeOptions,
+): AgentProvider => ({
+  name: "opencode",
+  env: options?.env ?? {},
+
+  buildPrintCommand({ prompt }: AgentCommandOptions): string {
+    return `opencode run --model ${shellEscape(model)} ${shellEscape(prompt)}`;
+  },
+
+  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
+    const args = ["opencode", "--model", model];
+    if (prompt) args.push("-p", prompt);
+    return args;
+  },
+
+  parseStreamLine(_line: string): ParsedStreamEvent[] {
+    return [];
   },
 });
 
@@ -204,6 +269,8 @@ export const codex = (model: string): AgentProvider => ({
 
 export interface ClaudeCodeOptions {
   readonly effort?: "low" | "medium" | "high" | "max";
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
 }
 
 export const claudeCode = (
@@ -211,15 +278,28 @@ export const claudeCode = (
   options?: ClaudeCodeOptions,
 ): AgentProvider => ({
   name: "claude-code",
+  env: options?.env ?? {},
 
-  buildPrintCommand(prompt: string): string {
+  buildPrintCommand({
+    prompt,
+    dangerouslySkipPermissions,
+  }: AgentCommandOptions): string {
+    const skipPerms = dangerouslySkipPermissions
+      ? " --dangerously-skip-permissions"
+      : "";
     const effortFlag = options?.effort ? ` --effort ${options.effort}` : "";
-    return `claude --print --verbose --dangerously-skip-permissions --output-format stream-json --model ${shellEscape(model)}${effortFlag} -p ${shellEscape(prompt)}`;
+    return `claude --print --verbose${skipPerms} --output-format stream-json --model ${shellEscape(model)}${effortFlag} -p ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(_prompt: string): string[] {
-    const args = ["claude", "--dangerously-skip-permissions", "--model", model];
+  buildInteractiveArgs({
+    prompt,
+    dangerouslySkipPermissions,
+  }: AgentCommandOptions): string[] {
+    const args = ["claude"];
+    if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
+    args.push("--model", model);
     if (options?.effort) args.push("--effort", options.effort);
+    if (prompt) args.push(prompt);
     return args;
   },
 

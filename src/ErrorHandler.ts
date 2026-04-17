@@ -16,6 +16,8 @@ export const formatErrorMessage = (error: SandboxError): string => {
       return `File copy failed: ${error.message}`;
     case "DockerError":
       return `Docker operation failed: ${error.message}. Is Docker running?`;
+    case "PodmanError":
+      return `Podman operation failed: ${error.message}. Is Podman running?`;
     case "SyncError":
       return `Git sync failed: ${error.message}`;
     case "WorktreeError":
@@ -28,7 +30,16 @@ export const formatErrorMessage = (error: SandboxError): string => {
       return `${error.message}`;
     case "InitError":
       return `${error.message}`;
-    case "TimeoutError":
+    case "AgentIdleTimeoutError":
+    case "WorktreeTimeoutError":
+    case "ContainerStartTimeoutError":
+    case "CopyToWorktreeTimeoutError":
+    case "SyncInTimeoutError":
+    case "HookTimeoutError":
+    case "GitSetupTimeoutError":
+    case "PromptExpansionTimeoutError":
+    case "CommitCollectionTimeoutError":
+    case "MergeToHostTimeoutError":
       return error.message;
   }
 };
@@ -54,11 +65,21 @@ export const withFriendlyErrors = <A, E, R>(
     ExecHostError: showErrorAndExit,
     CopyError: showErrorAndExit,
     DockerError: showErrorAndExit,
+    PodmanError: showErrorAndExit,
     SyncError: showErrorAndExit,
     WorktreeError: showErrorAndExit,
     PromptError: showErrorAndExit,
     AgentError: showErrorAndExit,
     ConfigDirError: showErrorAndExit,
     InitError: showErrorAndExit,
-    TimeoutError: showErrorAndExit,
+    AgentIdleTimeoutError: showErrorAndExit,
+    WorktreeTimeoutError: showErrorAndExit,
+    ContainerStartTimeoutError: showErrorAndExit,
+    CopyToWorktreeTimeoutError: showErrorAndExit,
+    SyncInTimeoutError: showErrorAndExit,
+    HookTimeoutError: showErrorAndExit,
+    GitSetupTimeoutError: showErrorAndExit,
+    PromptExpansionTimeoutError: showErrorAndExit,
+    CommitCollectionTimeoutError: showErrorAndExit,
+    MergeToHostTimeoutError: showErrorAndExit,
   }) as Effect.Effect<A, Exclude<E, SandboxError>, R | Display>;

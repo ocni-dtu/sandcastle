@@ -2,7 +2,9 @@ import { Effect, Option } from "effect";
 import { FileSystem } from "@effect/platform";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { WorktreeError } from "./errors.js";
+import { WorktreeError, WorktreeTimeoutError, withTimeout } from "./errors.js";
+
+const WORKTREE_TIMEOUT_MS = 30_000;
 
 /** Format a timestamp as YYYYMMDD-HHMMSS */
 const formatTimestamp = (date: Date): string => {
@@ -109,8 +111,17 @@ const listWorktrees = (
  */
 export const create = (
   repoDir: string,
-  opts?: { branch?: string; name?: string },
-): Effect.Effect<WorktreeInfo, WorktreeError, FileSystem.FileSystem> =>
+  opts?: {
+    branch?: string;
+    name?: string;
+    /** When false, reuse an existing worktree instead of failing on collision. Default: true. */
+    throwOnDuplicateWorktree?: boolean;
+  },
+): Effect.Effect<
+  WorktreeInfo,
+  WorktreeError | WorktreeTimeoutError,
+  FileSystem.FileSystem
+> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const worktreesDir = join(repoDir, ".sandcastle", "worktrees");
@@ -143,6 +154,9 @@ export const create = (
       const existing = yield* listWorktrees(repoDir);
       const collision = existing.find((wt) => wt.branch === branch);
       if (collision) {
+        if (opts.throwOnDuplicateWorktree === false) {
+          return { path: collision.path, branch };
+        }
         yield* Effect.fail(
           new WorktreeError({
             message:
@@ -186,7 +200,18 @@ export const create = (
     }
 
     return { path: worktreePath, branch };
-  });
+  }).pipe(
+    withTimeout(
+      WORKTREE_TIMEOUT_MS,
+      () =>
+        new WorktreeTimeoutError({
+          message: `Worktree creation timed out after ${WORKTREE_TIMEOUT_MS}ms`,
+          timeoutMs: WORKTREE_TIMEOUT_MS,
+          path: repoDir,
+          operation: "create",
+        }),
+    ),
+  );
 
 /**
  * Returns true if the worktree at `worktreePath` has any uncommitted changes:
@@ -221,7 +246,11 @@ export const remove = (
  */
 export const pruneStale = (
   repoDir: string,
-): Effect.Effect<void, WorktreeError, FileSystem.FileSystem> =>
+): Effect.Effect<
+  void,
+  WorktreeError | WorktreeTimeoutError,
+  FileSystem.FileSystem
+> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
@@ -273,4 +302,15 @@ export const pruneStale = (
         );
       }
     }
-  });
+  }).pipe(
+    withTimeout(
+      WORKTREE_TIMEOUT_MS,
+      () =>
+        new WorktreeTimeoutError({
+          message: `Worktree prune timed out after ${WORKTREE_TIMEOUT_MS}ms`,
+          timeoutMs: WORKTREE_TIMEOUT_MS,
+          path: repoDir,
+          operation: "prune",
+        }),
+    ),
+  );

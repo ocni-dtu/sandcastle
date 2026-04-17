@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { type DisplayEntry, SilentDisplay } from "./Display.js";
 import { Sandbox, type SandboxService } from "./SandboxFactory.js";
 import { makeLocalSandboxLayer } from "./testSandbox.js";
-import { ExecError } from "./errors.js";
+import { ExecError, SyncError } from "./errors.js";
 import { withSandboxLifecycle } from "./SandboxLifecycle.js";
 
 /**
@@ -34,13 +34,8 @@ const makePathTranslatingSandbox = (
         ...options,
         cwd: translateCwd(options?.cwd),
       }),
-    execStreaming: (command, onStdoutLine, options) =>
-      baseSandbox.execStreaming(command, onStdoutLine, {
-        ...options,
-        cwd: translateCwd(options?.cwd),
-      }),
     copyIn: (hp, sp) => baseSandbox.copyIn(hp, sp),
-    copyOut: (sp, hp) => baseSandbox.copyOut(sp, hp),
+    copyFileOut: (sp, hp) => baseSandbox.copyFileOut(sp, hp),
   };
 };
 
@@ -182,6 +177,107 @@ describe("withSandboxLifecycle (worktree mode)", () => {
           }),
       ).pipe(Effect.provide(Layer.merge(layer, testDisplayLayer))),
     );
+  });
+
+  it("onSandboxReady hooks pass sudo option through to exec", async () => {
+    const { hostDir, worktreeDir } = await setupWorktree();
+
+    const execCalls: Array<{
+      command: string;
+      options?: { sudo?: boolean; cwd?: string };
+    }> = [];
+
+    // Custom sandbox layer that records exec calls
+    const spySandboxLayer = Layer.succeed(Sandbox, {
+      exec: (command, options) => {
+        execCalls.push({ command, options });
+        return Effect.succeed({ stdout: "", stderr: "", exitCode: 0 });
+      },
+      copyIn: () => Effect.succeed(undefined as never),
+      copyFileOut: () => Effect.succeed(undefined as never),
+    });
+
+    await Effect.runPromise(
+      withSandboxLifecycle(
+        {
+          hostRepoDir: hostDir,
+          sandboxRepoDir: worktreeDir,
+          branch: "sandcastle/test",
+          hooks: {
+            onSandboxReady: [
+              { command: "npm install" },
+              { command: "apt-get install -y ffmpeg", sudo: true },
+            ],
+          },
+        },
+        () => Effect.succeed("ok"),
+      ).pipe(Effect.provide(Layer.merge(spySandboxLayer, testDisplayLayer))),
+    );
+
+    // Find the hook exec calls (after git config calls)
+    const hookCalls = execCalls.filter(
+      (c) =>
+        c.command === "npm install" ||
+        c.command === "apt-get install -y ffmpeg",
+    );
+    expect(hookCalls).toHaveLength(2);
+    expect(hookCalls[0]).toEqual(
+      expect.objectContaining({ command: "npm install" }),
+    );
+    expect(hookCalls[0]!.options?.sudo).toBeUndefined();
+    expect(hookCalls[1]).toEqual(
+      expect.objectContaining({ command: "apt-get install -y ffmpeg" }),
+    );
+    expect(hookCalls[1]!.options?.sudo).toBe(true);
+  });
+
+  it("onSandboxReady hooks run in parallel", async () => {
+    const { hostDir, worktreeDir } = await setupWorktree();
+
+    // Track the order of start/end events to verify parallel execution
+    const events: string[] = [];
+
+    const spySandboxLayer = Layer.succeed(Sandbox, {
+      exec: (command, options) => {
+        if (command === "slow-hook-a" || command === "slow-hook-b") {
+          events.push(`start:${command}`);
+          return Effect.gen(function* () {
+            // Yield to allow the other hook to start
+            yield* Effect.yieldNow();
+            events.push(`end:${command}`);
+            return { stdout: "", stderr: "", exitCode: 0 };
+          });
+        }
+        return Effect.succeed({ stdout: "", stderr: "", exitCode: 0 });
+      },
+      copyIn: () => Effect.succeed(undefined as never),
+      copyFileOut: () => Effect.succeed(undefined as never),
+    });
+
+    await Effect.runPromise(
+      withSandboxLifecycle(
+        {
+          hostRepoDir: hostDir,
+          sandboxRepoDir: worktreeDir,
+          branch: "sandcastle/test",
+          hooks: {
+            onSandboxReady: [
+              { command: "slow-hook-a" },
+              { command: "slow-hook-b" },
+            ],
+          },
+        },
+        () => Effect.succeed("ok"),
+      ).pipe(Effect.provide(Layer.merge(spySandboxLayer, testDisplayLayer))),
+    );
+
+    // With parallel execution, both hooks should start before either ends
+    expect(events).toEqual([
+      "start:slow-hook-a",
+      "start:slow-hook-b",
+      "end:slow-hook-a",
+      "end:slow-hook-b",
+    ]);
   });
 
   it("returns commits made in the worktree", async () => {
@@ -629,5 +725,203 @@ describe("withSandboxLifecycle (worktree mode)", () => {
       { cwd: hostDir },
     );
     expect(branchLog).toContain("explicit branch commit");
+  });
+
+  it("calls applyToHost after work completes but before merge operations", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+
+    const callOrder: string[] = [];
+
+    const result = await Effect.runPromise(
+      withSandboxLifecycle(
+        {
+          hostRepoDir: hostDir,
+          sandboxRepoDir: worktreeDir,
+          applyToHost: () =>
+            Effect.sync(() => {
+              callOrder.push("applyToHost");
+            }) as Effect.Effect<void, SyncError>,
+        },
+        (ctx) =>
+          Effect.gen(function* () {
+            callOrder.push("work");
+            yield* ctx.sandbox.exec('git config user.email "test@test.com"', {
+              cwd: ctx.sandboxRepoDir,
+            });
+            yield* ctx.sandbox.exec('git config user.name "Test"', {
+              cwd: ctx.sandboxRepoDir,
+            });
+            yield* ctx.sandbox.exec(
+              'sh -c "echo content > new.txt && git add new.txt && git commit -m \\"test commit\\""',
+              { cwd: ctx.sandboxRepoDir },
+            );
+          }),
+      ).pipe(Effect.provide(Layer.merge(layer, testDisplayLayer))),
+    );
+
+    // applyToHost should be called after work but before the merge
+    expect(callOrder).toEqual(["work", "applyToHost"]);
+    // Commits should still be collected properly
+    expect(result.commits).toHaveLength(1);
+  });
+
+  it("records baseHead from the host worktree, not from inside the sandbox", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+
+    // Use a container path that differs from the host worktree path
+    const containerPath = "/home/agent/workspace";
+    const translatingLayer = Layer.succeed(
+      Sandbox,
+      makePathTranslatingSandbox(worktreeDir, containerPath, layer),
+    );
+
+    let capturedBaseHead = "";
+    await Effect.runPromise(
+      withSandboxLifecycle(
+        {
+          hostRepoDir: hostDir,
+          sandboxRepoDir: containerPath,
+          hostWorktreePath: worktreeDir,
+        },
+        (ctx) =>
+          Effect.gen(function* () {
+            capturedBaseHead = ctx.baseHead;
+          }),
+      ).pipe(Effect.provide(Layer.merge(translatingLayer, testDisplayLayer))),
+    );
+
+    // baseHead should match the host worktree HEAD, not some sandbox-internal value
+    const hostHead = await getHead(worktreeDir);
+    expect(capturedBaseHead).toBe(hostHead);
+  });
+
+  it("applyToHost error propagates as SyncError", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+
+    await expect(
+      Effect.runPromise(
+        withSandboxLifecycle(
+          {
+            hostRepoDir: hostDir,
+            sandboxRepoDir: worktreeDir,
+            applyToHost: () =>
+              Effect.fail(new SyncError({ message: "sync failed" })),
+          },
+          () => Effect.succeed("ok"),
+        ).pipe(Effect.provide(Layer.merge(layer, testDisplayLayer))),
+      ),
+    ).rejects.toThrow("sync failed");
+  });
+
+  it("logs 'Syncing changes to host' taskLog when applyToHost is provided", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+    const displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(displayRef);
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* withSandboxLifecycle(
+          {
+            hostRepoDir: hostDir,
+            sandboxRepoDir: worktreeDir,
+            branch: "sandcastle/test",
+            applyToHost: () => Effect.void,
+          },
+          () => Effect.succeed("ok"),
+        );
+        return yield* Ref.get(displayRef);
+      }).pipe(Effect.provide(Layer.merge(layer, displayLayer))),
+    );
+
+    const syncLog = entries.find(
+      (e) => e._tag === "taskLog" && e.title === "Syncing changes to host",
+    );
+    expect(syncLog).toBeDefined();
+  });
+
+  it("does not log 'Syncing changes to host' when applyToHost is not provided", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+    const displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(displayRef);
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* withSandboxLifecycle(
+          {
+            hostRepoDir: hostDir,
+            sandboxRepoDir: worktreeDir,
+            branch: "sandcastle/test",
+          },
+          () => Effect.succeed("ok"),
+        );
+        return yield* Ref.get(displayRef);
+      }).pipe(Effect.provide(Layer.merge(layer, displayLayer))),
+    );
+
+    const syncLog = entries.find(
+      (e) => e._tag === "taskLog" && e.title === "Syncing changes to host",
+    );
+    expect(syncLog).toBeUndefined();
+  });
+
+  it("logs 'Merging to {branch}' taskLog in temp branch mode with commits", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+    const displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(displayRef);
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* withSandboxLifecycle(
+          {
+            hostRepoDir: hostDir,
+            sandboxRepoDir: worktreeDir,
+          },
+          (ctx) =>
+            Effect.gen(function* () {
+              yield* ctx.sandbox.exec('git config user.email "test@test.com"', {
+                cwd: ctx.sandboxRepoDir,
+              });
+              yield* ctx.sandbox.exec('git config user.name "Test"', {
+                cwd: ctx.sandboxRepoDir,
+              });
+              yield* ctx.sandbox.exec(
+                'sh -c "echo content > merge-file.txt && git add merge-file.txt && git commit -m \\"merge test\\""',
+                { cwd: ctx.sandboxRepoDir },
+              );
+            }),
+        );
+        return yield* Ref.get(displayRef);
+      }).pipe(Effect.provide(Layer.merge(layer, displayLayer))),
+    );
+
+    const mergeLog = entries.find(
+      (e) => e._tag === "taskLog" && e.title === "Merging to main",
+    );
+    expect(mergeLog).toBeDefined();
+  });
+
+  it("logs 'Collecting commits' taskLog after agent work", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+    const displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(displayRef);
+
+    const entries = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* withSandboxLifecycle(
+          {
+            hostRepoDir: hostDir,
+            sandboxRepoDir: worktreeDir,
+            branch: "sandcastle/test",
+          },
+          () => Effect.succeed("ok"),
+        );
+        return yield* Ref.get(displayRef);
+      }).pipe(Effect.provide(Layer.merge(layer, displayLayer))),
+    );
+
+    const commitLog = entries.find(
+      (e) => e._tag === "taskLog" && e.title === "Collecting commits",
+    );
+    expect(commitLog).toBeDefined();
   });
 });

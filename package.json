@@ -1,6 +1,6 @@
 {
   "name": "@ai-hero/sandcastle",
-  "version": "0.4.0",
+  "version": "0.4.8",
   "description": "CLI for orchestrating AI agents in isolated sandbox environments",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,6 +13,22 @@
     "./sandboxes/docker": {
       "import": "./dist/sandboxes/docker.js",
       "types": "./dist/sandboxes/docker.d.ts"
+    },
+    "./sandboxes/vercel": {
+      "import": "./dist/sandboxes/vercel.js",
+      "types": "./dist/sandboxes/vercel.d.ts"
+    },
+    "./sandboxes/podman": {
+      "import": "./dist/sandboxes/podman.js",
+      "types": "./dist/sandboxes/podman.d.ts"
+    },
+    "./sandboxes/daytona": {
+      "import": "./dist/sandboxes/daytona.js",
+      "types": "./dist/sandboxes/daytona.d.ts"
+    },
+    "./sandboxes/no-sandbox": {
+      "import": "./dist/sandboxes/no-sandbox.js",
+      "types": "./dist/sandboxes/no-sandbox.d.ts"
     }
   },
   "bin": {
@@ -28,7 +44,10 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "release": "changeset publish",
-    "sandcastle": "npm run build && tsx .sandcastle/run.ts"
+    "sandcastle": "npm run build && tsx .sandcastle/run.ts",
+    "test-podman": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-podman.ts",
+    "test-vercel": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-vercel.ts",
+    "test-interactive": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-interactive.ts"
   },
   "keywords": [
     "cli",
@@ -62,6 +81,18 @@
     "@effect/printer": "^0.48.0",
     "@effect/printer-ansi": "^0.48.0",
     "effect": "^3.20.0"
+  },
+  "peerDependencies": {
+    "@vercel/sandbox": ">=1.0.0",
+    "@daytona/sdk": "^0.164.0"
+  },
+  "peerDependenciesMeta": {
+    "@vercel/sandbox": {
+      "optional": true
+    },
+    "@daytona/sdk": {
+      "optional": true
+    }
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,json,md}": "prettier --write"

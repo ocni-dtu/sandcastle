@@ -9,9 +9,8 @@ import {
 
 describe("createBindMountSandboxProvider", () => {
   const makeMockHandle = (): BindMountSandboxHandle => ({
-    workspacePath: "/workspace",
+    worktreePath: "/workspace",
     exec: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
-    execStreaming: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
     close: vi.fn(async () => {}),
   });
 
@@ -55,46 +54,22 @@ describe("createBindMountSandboxProvider", () => {
     expect(provider.tag).toBe("bind-mount");
   });
 
-  it("defaults branchStrategy to head when omitted", () => {
+  it("does not have a branchStrategy property", () => {
     const provider = createBindMountSandboxProvider({
       name: "test-provider",
       create: async () => makeMockHandle(),
     });
 
-    expect(provider.branchStrategy).toEqual({ type: "head" });
-  });
-
-  it("stores explicit branchStrategy on the instance", () => {
-    const provider = createBindMountSandboxProvider({
-      name: "test-provider",
-      branchStrategy: { type: "merge-to-head" },
-      create: async () => makeMockHandle(),
-    });
-
-    expect(provider.branchStrategy).toEqual({ type: "merge-to-head" });
-  });
-
-  it("stores branch strategy with named branch", () => {
-    const provider = createBindMountSandboxProvider({
-      name: "test-provider",
-      branchStrategy: { type: "branch", branch: "feature/foo" },
-      create: async () => makeMockHandle(),
-    });
-
-    expect(provider.branchStrategy).toEqual({
-      type: "branch",
-      branch: "feature/foo",
-    });
+    expect("branchStrategy" in provider).toBe(false);
   });
 });
 
 describe("createIsolatedSandboxProvider", () => {
   const makeMockHandle = (): IsolatedSandboxHandle => ({
-    workspacePath: "/workspace",
+    worktreePath: "/workspace",
     exec: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
-    execStreaming: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
     copyIn: vi.fn(async () => {}),
-    copyOut: vi.fn(async () => {}),
+    copyFileOut: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
   });
 
@@ -132,35 +107,12 @@ describe("createIsolatedSandboxProvider", () => {
     expect(provider.tag).toBe("isolated");
   });
 
-  it("defaults branchStrategy to merge-to-head when omitted", () => {
+  it("does not have a branchStrategy property", () => {
     const provider = createIsolatedSandboxProvider({
       name: "test-isolated",
       create: async () => makeMockHandle(),
     });
 
-    expect(provider.branchStrategy).toEqual({ type: "merge-to-head" });
-  });
-
-  it("stores explicit branchStrategy on the instance", () => {
-    const provider = createIsolatedSandboxProvider({
-      name: "test-isolated",
-      branchStrategy: { type: "branch", branch: "feature/foo" },
-      create: async () => makeMockHandle(),
-    });
-
-    expect(provider.branchStrategy).toEqual({
-      type: "branch",
-      branch: "feature/foo",
-    });
-  });
-
-  it("stores merge-to-head branchStrategy on the instance", () => {
-    const provider = createIsolatedSandboxProvider({
-      name: "test-isolated",
-      branchStrategy: { type: "merge-to-head" },
-      create: async () => makeMockHandle(),
-    });
-
-    expect(provider.branchStrategy).toEqual({ type: "merge-to-head" });
+    expect("branchStrategy" in provider).toBe(false);
   });
 });

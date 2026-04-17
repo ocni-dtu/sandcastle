@@ -12,18 +12,41 @@ export interface ExecResult {
   readonly exitCode: number;
 }
 
+/** Options for interactiveExec — the streams the provider should wire to the spawned process. */
+export interface InteractiveExecOptions {
+  readonly stdin: NodeJS.ReadableStream;
+  readonly stdout: NodeJS.WritableStream;
+  readonly stderr: NodeJS.WritableStream;
+  readonly cwd?: string;
+}
+
 /** Handle to a running bind-mount sandbox. */
 export interface BindMountSandboxHandle {
-  /** Absolute path to the workspace inside the sandbox. */
-  readonly workspacePath: string;
-  /** Execute a command inside the sandbox. */
-  exec(command: string, options?: { cwd?: string }): Promise<ExecResult>;
-  /** Execute a command, streaming stdout line-by-line. */
-  execStreaming(
+  /** Absolute path to the worktree inside the sandbox. */
+  readonly worktreePath: string;
+  /**
+   * Execute a command in the sandbox.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work. A buffered/batch
+   * implementation that only calls `onLine` after the process exits does NOT
+   * satisfy this contract.
+   */
+  exec(
     command: string,
-    onLine: (line: string) => void,
-    options?: { cwd?: string },
+    options?: { onLine?: (line: string) => void; cwd?: string; sudo?: boolean },
   ): Promise<ExecResult>;
+  /**
+   * Launch an interactive process inside the sandbox.
+   * Optional — providers that support interactive sessions implement this.
+   * The provider detects TTY mode from the streams (e.g. stdin.isTTY) and
+   * allocates a pseudo-terminal accordingly.
+   */
+  interactiveExec?(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
   /** Tear down the sandbox. */
   close(): Promise<void>;
 }
@@ -48,8 +71,8 @@ export interface BindMountCreateOptions {
 export interface BindMountSandboxProviderConfig {
   /** Human-readable name for this provider (e.g. "docker", "podman"). */
   readonly name: string;
-  /** Branch strategy. Defaults to { type: "head" } if omitted. */
-  readonly branchStrategy?: BindMountBranchStrategy;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
   /** Create a sandbox handle from the given options. */
   readonly create: (
     options: BindMountCreateOptions,
@@ -58,20 +81,35 @@ export interface BindMountSandboxProviderConfig {
 
 /** Handle to a running isolated sandbox (extends bind-mount with file transfer). */
 export interface IsolatedSandboxHandle {
-  /** Absolute path to the workspace inside the sandbox. */
-  readonly workspacePath: string;
-  /** Execute a command inside the sandbox. */
-  exec(command: string, options?: { cwd?: string }): Promise<ExecResult>;
-  /** Execute a command, streaming stdout line-by-line. */
-  execStreaming(
+  /** Absolute path to the worktree inside the sandbox. */
+  readonly worktreePath: string;
+  /**
+   * Execute a command in the sandbox.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work. A buffered/batch
+   * implementation that only calls `onLine` after the process exits does NOT
+   * satisfy this contract.
+   */
+  exec(
     command: string,
-    onLine: (line: string) => void,
-    options?: { cwd?: string },
+    options?: { onLine?: (line: string) => void; cwd?: string; sudo?: boolean },
   ): Promise<ExecResult>;
-  /** Copy a file from the host into the sandbox. */
+  /**
+   * Launch an interactive process inside the sandbox.
+   * Optional — providers that support interactive sessions implement this.
+   * The provider detects TTY mode from the streams (e.g. stdin.isTTY) and
+   * allocates a pseudo-terminal accordingly.
+   */
+  interactiveExec?(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
+  /** Copy a file or directory from the host into the sandbox. */
   copyIn(hostPath: string, sandboxPath: string): Promise<void>;
-  /** Copy a file from the sandbox to the host. */
-  copyOut(sandboxPath: string, hostPath: string): Promise<void>;
+  /** Copy a single file from the sandbox to the host. */
+  copyFileOut(sandboxPath: string, hostPath: string): Promise<void>;
   /** Tear down the sandbox. */
   close(): Promise<void>;
 }
@@ -86,8 +124,8 @@ export interface IsolatedCreateOptions {
 export interface IsolatedSandboxProviderConfig {
   /** Human-readable name for this provider (e.g. "daytona", "e2b"). */
   readonly name: string;
-  /** Branch strategy. Defaults to { type: "merge-to-head" } if omitted. */
-  readonly branchStrategy?: IsolatedBranchStrategy;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
   /** Create an isolated sandbox handle from the given options. */
   readonly create: (
     options: IsolatedCreateOptions,
@@ -100,8 +138,8 @@ export interface BindMountSandboxProvider {
   readonly tag: "bind-mount";
   /** Human-readable provider name. */
   readonly name: string;
-  /** Branch strategy — controls how the agent's changes relate to branches. Defaults to head. */
-  readonly branchStrategy: BindMountBranchStrategy;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
   /** @internal Create a sandbox handle. */
   readonly create: (
     options: BindMountCreateOptions,
@@ -114,12 +152,53 @@ export interface IsolatedSandboxProvider {
   readonly tag: "isolated";
   /** Human-readable provider name. */
   readonly name: string;
-  /** Branch strategy — controls how the agent's changes relate to branches. Defaults to merge-to-head. */
-  readonly branchStrategy: IsolatedBranchStrategy;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
   /** @internal Create an isolated sandbox handle. */
   readonly create: (
     options: IsolatedCreateOptions,
   ) => Promise<IsolatedSandboxHandle>;
+}
+
+/** Handle to a no-sandbox session — runs commands directly on the host. */
+export interface NoSandboxHandle {
+  /** Absolute path to the worktree on the host. */
+  readonly worktreePath: string;
+  /**
+   * Execute a command on the host.
+   *
+   * Implementations MUST support line-by-line streaming via `onLine`. This is
+   * how Sandcastle delivers live feedback to the user and enforces idle timeouts —
+   * without a streaming implementation, neither will work.
+   */
+  exec(
+    command: string,
+    options?: { onLine?: (line: string) => void; cwd?: string; sudo?: boolean },
+  ): Promise<ExecResult>;
+  /**
+   * Launch an interactive process on the host with inherited stdio.
+   */
+  interactiveExec(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
+  /** No-op — no container to tear down. */
+  close(): Promise<void>;
+}
+
+/** A no-sandbox provider — runs the agent directly on the host with no container isolation. */
+export interface NoSandboxProvider {
+  /** @internal Discriminator for internal dispatch. */
+  readonly tag: "none";
+  /** Human-readable provider name. */
+  readonly name: string;
+  /** Environment variables injected by this provider. */
+  readonly env: Record<string, string>;
+  /** @internal Create a no-sandbox handle. */
+  readonly create: (options: {
+    readonly worktreePath: string;
+    readonly env: Record<string, string>;
+  }) => Promise<NoSandboxHandle>;
 }
 
 // ---------- Branch strategy types ----------
@@ -151,16 +230,35 @@ export type IsolatedBranchStrategy =
   | MergeToHeadBranchStrategy
   | NamedBranchStrategy;
 
+/** Branch strategy for no-sandbox providers (all three — same as bind-mount). */
+export type NoSandboxBranchStrategy =
+  | HeadBranchStrategy
+  | MergeToHeadBranchStrategy
+  | NamedBranchStrategy;
+
 /** Union of all branch strategy variants. */
-export type BranchStrategy = BindMountBranchStrategy | IsolatedBranchStrategy;
+export type BranchStrategy =
+  | BindMountBranchStrategy
+  | IsolatedBranchStrategy
+  | NoSandboxBranchStrategy;
 
 /**
  * A sandbox provider — the pluggable unit that `run()` and `createSandbox()` accept.
  * Tagged for internal dispatch: "bind-mount" or "isolated".
+ * Does not include `NoSandboxProvider` — that is only valid for `interactive()`.
  */
 export type SandboxProvider =
   | BindMountSandboxProvider
   | IsolatedSandboxProvider;
+
+/**
+ * Any sandbox provider, including no-sandbox.
+ * This is the union accepted by `interactive()`.
+ */
+export type AnySandboxProvider =
+  | BindMountSandboxProvider
+  | IsolatedSandboxProvider
+  | NoSandboxProvider;
 
 /**
  * Create a bind-mount sandbox provider from a config object.
@@ -171,7 +269,7 @@ export const createBindMountSandboxProvider = (
 ): BindMountSandboxProvider => ({
   tag: "bind-mount",
   name: config.name,
-  branchStrategy: config.branchStrategy ?? { type: "head" },
+  env: config.env ?? {},
   create: config.create,
 });
 
@@ -184,6 +282,6 @@ export const createIsolatedSandboxProvider = (
 ): IsolatedSandboxProvider => ({
   tag: "isolated",
   name: config.name,
-  branchStrategy: config.branchStrategy ?? { type: "merge-to-head" },
+  env: config.env ?? {},
   create: config.create,
 });

@@ -36,7 +36,7 @@ const hooks = {
 // Copy node_modules from the host into the worktree before each sandbox
 // starts. Avoids a full npm install from scratch; the hook above handles
 // platform-specific binaries and any packages added since the last copy.
-const copyToSandbox = ["node_modules"];
+const copyToWorktree = ["node_modules"];
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -57,8 +57,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   const implement = await sandcastle.run({
     hooks,
-    copyToSandbox,
+    copyToWorktree,
     sandbox: docker(),
+    branchStrategy: { type: "merge-to-head" },
     name: "implementer",
     maxIterations: 100,
     agent: sandcastle.claudeCode("claude-sonnet-4-6"),
@@ -85,10 +86,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   await sandcastle.run({
     hooks,
-    copyToSandbox,
-    sandbox: docker({ branchStrategy: { type: "branch", branch } }),
+    copyToWorktree,
+    sandbox: docker(),
+    branchStrategy: { type: "branch", branch },
     name: "reviewer",
-    maxIterations: 10,
+    maxIterations: 1,
     agent: sandcastle.claudeCode("claude-sonnet-4-6"),
     promptFile: "./.sandcastle/review-prompt.md",
     // Prompt arguments substitute {{BRANCH}} in review-prompt.md before the

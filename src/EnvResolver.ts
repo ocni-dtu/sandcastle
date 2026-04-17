@@ -18,7 +18,14 @@ const parseEnvFile = (
       const eqIndex = trimmed.indexOf("=");
       if (eqIndex === -1) continue;
       const key = trimmed.slice(0, eqIndex).trim();
-      const value = trimmed.slice(eqIndex + 1).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
+      if (
+        value.length >= 2 &&
+        ((value[0] === '"' && value[value.length - 1] === '"') ||
+          (value[0] === "'" && value[value.length - 1] === "'"))
+      ) {
+        value = value.slice(1, -1);
+      }
       vars[key] = value;
     }
     return vars;

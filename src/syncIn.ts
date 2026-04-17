@@ -121,22 +121,22 @@ export const syncIn = (
             }),
         });
 
-        // Clone from bundle into the workspace
-        const workspacePath = handle.workspacePath;
+        // Clone from bundle into the worktree
+        const worktreePath = handle.worktreePath;
         yield* execOk(
           handle,
-          `git clone "${bundleSandboxPath}" "${workspacePath}_clone"`,
+          `git clone "${bundleSandboxPath}" "${worktreePath}_clone"`,
         );
 
-        // Move contents from clone into workspace (git clone requires empty target)
+        // Move contents from clone into worktree (git clone requires empty target)
         yield* execOk(
           handle,
-          `rm -rf "${workspacePath}" && mv "${workspacePath}_clone" "${workspacePath}"`,
+          `rm -rf "${worktreePath}" && mv "${worktreePath}_clone" "${worktreePath}"`,
         );
 
         // Checkout the correct branch
         yield* execOk(handle, `git checkout "${branch}"`, {
-          cwd: workspacePath,
+          cwd: worktreePath,
         });
 
         // Clean up sandbox temp files
@@ -152,7 +152,7 @@ export const syncIn = (
           hostRepoDir,
         )).trim();
         const sandboxHead = (yield* execOk(handle, "git rev-parse HEAD", {
-          cwd: workspacePath,
+          cwd: worktreePath,
         })).stdout.trim();
 
         if (hostHead !== sandboxHead) {

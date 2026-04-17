@@ -46,7 +46,7 @@ describe("syncOut", () => {
       await Effect.runPromise(syncIn(hostDir, handle));
 
       // Make a commit inside the sandbox
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       await handle.exec('echo "new file" > new.txt', { cwd: wp });
       await handle.exec("git add new.txt", { cwd: wp });
       await handle.exec('git commit -m "add new file"', { cwd: wp });
@@ -76,7 +76,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       await handle.exec('echo "a" > a.txt', { cwd: wp });
       await handle.exec("git add a.txt", { cwd: wp });
       await handle.exec('git commit -m "add a"', { cwd: wp });
@@ -137,7 +137,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
 
       // Create a branch, commit on it, switch back, commit on main, then merge
       await handle.exec("git checkout -b feature", { cwd: wp });
@@ -178,7 +178,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       // Modify tracked file (unstaged change)
       await handle.exec('echo "modified content" > initial.txt', { cwd: wp });
       // Create and stage a new file
@@ -214,7 +214,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       // Create untracked files (not git-added)
       await handle.exec('echo "untracked1" > untracked1.txt', { cwd: wp });
       await handle.exec("mkdir -p subdir", { cwd: wp });
@@ -248,7 +248,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
 
       // 1. Make a commit
       await handle.exec('echo "committed" > committed.txt', { cwd: wp });
@@ -292,7 +292,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       await handle.exec('echo "new" > new.txt', { cwd: wp });
       await handle.exec("git add new.txt", { cwd: wp });
       await handle.exec('git commit -m "add new"', { cwd: wp });
@@ -322,7 +322,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       await handle.exec('echo "new file" > new.txt', { cwd: wp });
       await handle.exec("git add new.txt", { cwd: wp });
       await handle.exec('git commit -m "add new file"', { cwd: wp });
@@ -356,7 +356,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       // Create a commit in the sandbox that modifies initial.txt
       await handle.exec('echo "sandbox change" > initial.txt', { cwd: wp });
       await handle.exec("git add initial.txt", { cwd: wp });
@@ -411,7 +411,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       // Make uncommitted changes in sandbox
       await handle.exec('echo "sandbox uncommitted" > initial.txt', {
         cwd: wp,
@@ -462,7 +462,7 @@ describe("syncOut", () => {
     try {
       await Effect.runPromise(syncIn(hostDir, handle));
 
-      const wp = handle.workspacePath;
+      const wp = handle.worktreePath;
       await handle.exec('git config user.email "agent@sandbox.com"', {
         cwd: wp,
       });

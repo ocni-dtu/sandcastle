@@ -2,6 +2,7 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const MAX_ITERATIONS = 10;
+const MAX_PARALLEL = 4;
 
 for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   console.log(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
@@ -37,45 +38,64 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     console.log(`  #${issue.number}: ${issue.title} → ${issue.branch}`);
   }
 
-  // Phase 2: Execute + Review — implement then review each branch, all in parallel
+  // Phase 2: Execute + Review — implement then review each branch, max 4 in parallel
+  let running = 0;
+  const queue: (() => void)[] = [];
+  const acquire = () =>
+    running < MAX_PARALLEL
+      ? (running++, Promise.resolve())
+      : new Promise<void>((resolve) => queue.push(resolve));
+  const release = () => {
+    running--;
+    const next = queue.shift();
+    if (next) {
+      running++;
+      next();
+    }
+  };
+
   const settled = await Promise.allSettled(
     issues.map(async (issue) => {
-      await using sandbox = await sandcastle.createSandbox({
-        sandbox: docker({
-          branchStrategy: { type: "branch", branch: issue.branch },
-        }),
-        branch: issue.branch,
-        copyToSandbox: ["node_modules"],
-        hooks: {
-          onSandboxReady: [{ command: "npm install && npm run build" }],
-        },
-      });
+      await acquire();
+      try {
+        await using sandbox = await sandcastle.createSandbox({
+          sandbox: docker(),
+          branch: issue.branch,
+          throwOnDuplicateWorktree: false,
+          copyToWorkspace: ["node_modules"],
+          hooks: {
+            onSandboxReady: [{ command: "npm install && npm run build" }],
+          },
+        });
 
-      const result = await sandbox.run({
-        name: "Implementer #" + issue.number,
-        agent: sandcastle.claudeCode("claude-opus-4-6"),
-        promptFile: "./.sandcastle/implement-prompt.md",
-        promptArgs: {
-          ISSUE_NUMBER: String(issue.number),
-          ISSUE_TITLE: issue.title,
-          BRANCH: issue.branch,
-        },
-      });
-
-      if (result.commits.length > 0) {
-        await sandbox.run({
-          name: "Reviewer #" + issue.number,
+        const result = await sandbox.run({
+          name: "Implementer #" + issue.number,
           agent: sandcastle.claudeCode("claude-opus-4-6"),
-          promptFile: "./.sandcastle/review-prompt.md",
+          promptFile: "./.sandcastle/implement-prompt.md",
           promptArgs: {
             ISSUE_NUMBER: String(issue.number),
             ISSUE_TITLE: issue.title,
             BRANCH: issue.branch,
           },
         });
-      }
 
-      return result;
+        if (result.commits.length > 0) {
+          await sandbox.run({
+            name: "Reviewer #" + issue.number,
+            agent: sandcastle.claudeCode("claude-opus-4-6"),
+            promptFile: "./.sandcastle/review-prompt.md",
+            promptArgs: {
+              ISSUE_NUMBER: String(issue.number),
+              ISSUE_TITLE: issue.title,
+              BRANCH: issue.branch,
+            },
+          });
+        }
+
+        return result;
+      } finally {
+        release();
+      }
     }),
   );
 

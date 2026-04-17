@@ -1,18 +1,37 @@
 export { run } from "./run.js";
 export type { RunOptions, RunResult, LoggingOption } from "./run.js";
+export { interactive } from "./interactive.js";
+export type { InteractiveOptions, InteractiveResult } from "./interactive.js";
 export { createSandbox } from "./createSandbox.js";
 export type {
   CreateSandboxOptions,
   Sandbox,
   SandboxRunOptions,
   SandboxRunResult,
+  SandboxInteractiveOptions,
+  SandboxInteractiveResult,
   CloseResult,
 } from "./createSandbox.js";
+export { createWorktree } from "./createWorktree.js";
+export type {
+  CreateWorktreeOptions,
+  Worktree,
+  WorktreeBranchStrategy,
+  WorktreeInteractiveOptions,
+  WorktreeRunOptions,
+  WorktreeRunResult,
+  WorktreeCreateSandboxOptions,
+} from "./createWorktree.js";
 export type { PromptArgs } from "./PromptArgumentSubstitution.js";
-export { claudeCode, codex, junie, pi } from "./AgentProvider.js";
+export type { MountConfig } from "./MountConfig.js";
+export { claudeCode, codex, opencode, junie, pi } from "./AgentProvider.js";
 export type {
   AgentProvider,
+  AgentCommandOptions,
   ClaudeCodeOptions,
+  CodexOptions,
+  OpenCodeOptions,
+  PiOptions,
   JunieOptions,
 } from "./AgentProvider.js";
 export {
@@ -21,10 +40,14 @@ export {
 } from "./SandboxProvider.js";
 export type {
   SandboxProvider,
+  AnySandboxProvider,
   BindMountSandboxProvider,
   IsolatedSandboxProvider,
+  NoSandboxProvider,
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
+  NoSandboxHandle,
+  InteractiveExecOptions,
   ExecResult,
   BindMountCreateOptions,
   BindMountSandboxProviderConfig,
@@ -33,6 +56,7 @@ export type {
   BranchStrategy,
   BindMountBranchStrategy,
   IsolatedBranchStrategy,
+  NoSandboxBranchStrategy,
   HeadBranchStrategy,
   MergeToHeadBranchStrategy,
   NamedBranchStrategy,

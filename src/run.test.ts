@@ -1,3 +1,6 @@
+import { readFileSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   buildCompletionMessage,
@@ -12,14 +15,14 @@ import {
 } from "./run.js";
 import { claudeCode } from "./AgentProvider.js";
 import { defaultImageName } from "./sandboxes/docker.js";
+import * as sandcastle from "./SandboxProvider.js";
 import { createBindMountSandboxProvider } from "./SandboxProvider.js";
 
 const testSandbox = createBindMountSandboxProvider({
   name: "test",
   create: async () => ({
-    workspacePath: "/home/agent/workspace",
+    worktreePath: "/home/agent/workspace",
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     close: async () => {},
   }),
 });
@@ -237,15 +240,31 @@ describe("RunOptions", () => {
   });
 });
 
-describe("copyToSandbox with head branch strategy", () => {
-  it("throws a runtime error when copyToSandbox is provided with head strategy", async () => {
-    const headSandbox = createBindMountSandboxProvider({
-      name: "test-head",
-      branchStrategy: { type: "head" },
+describe("copyToWorktree with head branch strategy", () => {
+  it("throws a runtime error when copyToWorktree is provided with head strategy", async () => {
+    await expect(
+      run({
+        agent: claudeCode("claude-opus-4-6"),
+        sandbox: testSandbox,
+        prompt: "test",
+        branchStrategy: { type: "head" },
+        copyToWorktree: [".env"],
+      }),
+    ).rejects.toThrow(
+      "copyToWorktree is not supported with head branch strategy",
+    );
+  });
+});
+
+describe("branchStrategy on RunOptions", () => {
+  it("throws when head strategy is used with an isolated provider", async () => {
+    const isolatedSandbox = sandcastle.createIsolatedSandboxProvider({
+      name: "test-isolated",
       create: async () => ({
-        workspacePath: "/home/agent/workspace",
+        worktreePath: "/workspace",
         exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-        execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+        copyIn: async () => {},
+        copyFileOut: async () => {},
         close: async () => {},
       }),
     });
@@ -253,12 +272,12 @@ describe("copyToSandbox with head branch strategy", () => {
     await expect(
       run({
         agent: claudeCode("claude-opus-4-6"),
-        sandbox: headSandbox,
+        sandbox: isolatedSandbox,
         prompt: "test",
-        copyToSandbox: [".env"],
+        branchStrategy: { type: "head" },
       }),
     ).rejects.toThrow(
-      "copyToSandbox is not supported with head branch strategy",
+      "head branch strategy is not supported with isolated providers",
     );
   });
 });
@@ -399,5 +418,52 @@ describe("buildLogFilename", () => {
     expect(buildLogFilename("main", undefined, "my review agent")).toBe(
       "main-my-review-agent.log",
     );
+  });
+});
+
+describe("run() error logging to file", () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it("writes SandboxError to log file when using file logging", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sandcastle-run-error-"));
+    const logPath = join(dir, "test.log");
+
+    await expect(
+      run({
+        agent: claudeCode("claude-opus-4-6"),
+        sandbox: testSandbox,
+        prompt: "test prompt",
+        branchStrategy: { type: "head" },
+        promptArgs: { SOURCE_BRANCH: "override" },
+        logging: { type: "file", path: logPath },
+      }),
+    ).rejects.toThrow();
+
+    const log = readFileSync(logPath, "utf-8");
+    expect(log).toContain("SOURCE_BRANCH");
+    expect(log).toContain("built-in prompt argument");
+  });
+
+  it("still propagates the error as a rejected promise", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sandcastle-run-error-"));
+    const logPath = join(dir, "test.log");
+
+    await expect(
+      run({
+        agent: claudeCode("claude-opus-4-6"),
+        sandbox: testSandbox,
+        prompt: "test prompt",
+        branchStrategy: { type: "head" },
+        promptArgs: { SOURCE_BRANCH: "override" },
+        logging: { type: "file", path: logPath },
+      }),
+    ).rejects.toThrow("SOURCE_BRANCH");
   });
 });

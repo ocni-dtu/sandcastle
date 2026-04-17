@@ -26,11 +26,17 @@ await run({
   // per run, or set it to 1 for a single-shot mode.
   maxIterations: 3,
 
+  // Branch strategy — merge-to-head creates a temporary branch for the agent
+  // to work on, then merges the result back to HEAD when the run completes.
+  // This is required when using copyToWorktree, since head mode bind-mounts
+  // the host directory directly (no worktree to copy into).
+  branchStrategy: { type: "merge-to-head" },
+
   // Copy node_modules from the host into the worktree before the sandbox
   // starts. This avoids a full npm install from scratch on every iteration.
   // The onSandboxReady hook still runs npm install as a safety net to handle
   // platform-specific binaries and any packages added since the last copy.
-  copyToSandbox: ["node_modules"],
+  copyToWorktree: ["node_modules"],
 
   // Lifecycle hooks — commands that run inside the sandbox at specific points.
   hooks: {

@@ -4,6 +4,7 @@ import { type DisplayEntry, SilentDisplay } from "./Display.js";
 import {
   substitutePromptArgs,
   validateNoBuiltInArgOverride,
+  findMissingPromptArgKeys,
   BUILT_IN_PROMPT_ARG_KEYS,
 } from "./PromptArgumentSubstitution.js";
 import { PromptError } from "./errors.js";
@@ -110,6 +111,47 @@ describe("PromptArgumentSubstitution", () => {
     expect(result).toBe("Output: !`gh issue view 123`");
   });
 
+  it("replaces {{ KEY }} with spaces inside braces", async () => {
+    const { layer } = setup();
+    const result = await run("Hello {{ NAME }}", { NAME: "world" }, layer);
+    expect(result).toBe("Hello world");
+  });
+
+  it("replaces {{  KEY  }} with multiple spaces", async () => {
+    const { layer } = setup();
+    const result = await run("Hello {{  NAME  }}", { NAME: "world" }, layer);
+    expect(result).toBe("Hello world");
+  });
+
+  it("replaces asymmetric whitespace like {{ KEY}}", async () => {
+    const { layer } = setup();
+    const result = await run("Hello {{ NAME}}", { NAME: "world" }, layer);
+    expect(result).toBe("Hello world");
+  });
+
+  it("replaces placeholder with tab whitespace", async () => {
+    const { layer } = setup();
+    const result = await run("Hello {{\tNAME\t}}", { NAME: "world" }, layer);
+    expect(result).toBe("Hello world");
+  });
+
+  it("error message uses normalized form for spaced placeholder", async () => {
+    const { layer } = setup();
+    const error = await runFail("Hello {{ MISSING }}", {}, layer);
+    expect(error).toBeInstanceOf(PromptError);
+    expect(error.message).toContain("{{MISSING}}");
+  });
+
+  it("spaced placeholder counts as reference for unused-arg check", async () => {
+    const { layer, displayRef } = setup();
+    await run("{{ NAME }}", { NAME: "world" }, layer);
+    const entries = await Effect.runPromise(Ref.get(displayRef));
+    const warnings = entries.filter(
+      (e) => e._tag === "status" && e.severity === "warn",
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
   it("handles keys with underscores and digits", async () => {
     const { layer } = setup();
     const result = await run("{{MY_KEY_2}} here", { MY_KEY_2: "value" }, layer);
@@ -203,5 +245,59 @@ describe("BUILT_IN_PROMPT_ARG_KEYS", () => {
   it("includes SOURCE_BRANCH and TARGET_BRANCH", () => {
     expect(BUILT_IN_PROMPT_ARG_KEYS).toContain("SOURCE_BRANCH");
     expect(BUILT_IN_PROMPT_ARG_KEYS).toContain("TARGET_BRANCH");
+  });
+});
+
+describe("findMissingPromptArgKeys", () => {
+  it("returns empty array when prompt has no placeholders", () => {
+    expect(findMissingPromptArgKeys("plain prompt", {})).toEqual([]);
+  });
+
+  it("returns empty array when all placeholders are provided", () => {
+    expect(
+      findMissingPromptArgKeys("Fix {{COMPONENT}} bug", {
+        COMPONENT: "Login",
+      }),
+    ).toEqual([]);
+  });
+
+  it("returns missing keys not present in provided args", () => {
+    const result = findMissingPromptArgKeys(
+      "Fix {{COMPONENT}} on {{BRANCH_NAME}}",
+      { COMPONENT: "Login" },
+    );
+    expect(result).toEqual(["BRANCH_NAME"]);
+  });
+
+  it("returns multiple missing keys", () => {
+    const result = findMissingPromptArgKeys("{{A}} and {{B}} and {{C}}", {});
+    expect(result).toEqual(["A", "B", "C"]);
+  });
+
+  it("excludes built-in keys (SOURCE_BRANCH, TARGET_BRANCH)", () => {
+    const result = findMissingPromptArgKeys(
+      "Branch: {{SOURCE_BRANCH}} target: {{TARGET_BRANCH}} component: {{COMPONENT}}",
+      {},
+    );
+    expect(result).toEqual(["COMPONENT"]);
+    expect(result).not.toContain("SOURCE_BRANCH");
+    expect(result).not.toContain("TARGET_BRANCH");
+  });
+
+  it("handles spaced placeholders like {{ KEY }}", () => {
+    const result = findMissingPromptArgKeys("Fix {{ COMPONENT }}", {});
+    expect(result).toEqual(["COMPONENT"]);
+  });
+
+  it("does not return duplicate keys", () => {
+    const result = findMissingPromptArgKeys("{{KEY}} and {{KEY}} again", {});
+    expect(result).toEqual(["KEY"]);
+  });
+
+  it("skips keys already present in provided args", () => {
+    const result = findMissingPromptArgKeys("{{PROVIDED}} and {{MISSING}}", {
+      PROVIDED: "value",
+    });
+    expect(result).toEqual(["MISSING"]);
   });
 });

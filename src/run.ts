@@ -14,10 +14,12 @@ import { resolvePrompt } from "./PromptResolver.js";
 import {
   WorktreeDockerSandboxFactory,
   SandboxConfig,
-  SANDBOX_WORKSPACE_DIR,
 } from "./SandboxFactory.js";
-import type { SandboxProvider } from "./SandboxProvider.js";
+import type { SandboxProvider, BranchStrategy } from "./SandboxProvider.js";
 import { resolveEnv } from "./EnvResolver.js";
+import { formatErrorMessage } from "./ErrorHandler.js";
+import type { SandboxError } from "./errors.js";
+import { mergeProviderEnv } from "./mergeProviderEnv.js";
 import { generateTempBranchName, getCurrentBranch } from "./WorktreeManager.js";
 import {
   type PromptArgs,
@@ -143,7 +145,10 @@ export interface RunOptions {
   readonly maxIterations?: number;
   /** Hooks to run during sandbox lifecycle */
   readonly hooks?: {
-    readonly onSandboxReady?: ReadonlyArray<{ command: string }>;
+    readonly onSandboxReady?: ReadonlyArray<{
+      command: string;
+      sudo?: boolean;
+    }>;
   };
   /** Key-value map for {{KEY}} placeholder substitution in prompts */
   readonly promptArgs?: PromptArgs;
@@ -156,7 +161,12 @@ export interface RunOptions {
   /** Optional name for the run, shown as a prefix in log output */
   readonly name?: string;
   /** Paths relative to the host repo root to copy into the worktree before sandbox start. */
-  readonly copyToSandbox?: string[];
+  readonly copyToWorktree?: string[];
+  /** Branch strategy — controls how the agent's changes relate to branches.
+   * Defaults to { type: "head" } for bind-mount providers and { type: "merge-to-head" } for isolated providers. */
+  readonly branchStrategy?: BranchStrategy;
+  /** When false, reuse an existing worktree for the target branch instead of failing on collision. Default: true. */
+  readonly throwOnDuplicateWorktree?: boolean;
 }
 
 export interface RunResult {
@@ -185,18 +195,29 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
     agent: provider,
   } = options;
 
-  // Derive branch strategy from the sandbox provider
-  const branchStrategy = options.sandbox.branchStrategy;
+  // Derive branch strategy: explicit option > default based on provider tag
+  const branchStrategy: BranchStrategy =
+    options.branchStrategy ??
+    (options.sandbox.tag === "isolated"
+      ? { type: "merge-to-head" }
+      : { type: "head" });
   const effectiveBranchType = branchStrategy.type;
 
-  // Validate: copyToSandbox is incompatible with head strategy
+  // Validate: head strategy is not supported with isolated providers
+  if (effectiveBranchType === "head" && options.sandbox.tag === "isolated") {
+    throw new Error(
+      "head branch strategy is not supported with isolated providers",
+    );
+  }
+
+  // Validate: copyToWorktree is incompatible with head strategy
   if (
     effectiveBranchType === "head" &&
-    options.copyToSandbox &&
-    options.copyToSandbox.length > 0
+    options.copyToWorktree &&
+    options.copyToWorktree.length > 0
   ) {
     throw new Error(
-      "copyToSandbox is not supported with head branch strategy. " +
+      "copyToWorktree is not supported with head branch strategy. " +
         "In head mode the host working directory is bind-mounted directly.",
     );
   }
@@ -216,10 +237,15 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
 
   const agentName = provider.name;
 
-  // Resolve env vars
-  const env = await Effect.runPromise(
+  // Resolve env vars and merge with provider env
+  const resolvedEnv = await Effect.runPromise(
     resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
   );
+  const env = mergeProviderEnv({
+    resolvedEnv,
+    agentProviderEnv: provider.env,
+    sandboxProviderEnv: options.sandbox.env,
+  });
 
   // Always capture the host's current branch for the TARGET_BRANCH built-in
   // prompt argument. When using a temp branch, it also prefixes the log filename.
@@ -270,9 +296,11 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
       Layer.succeed(SandboxConfig, {
         env,
         hostRepoDir,
-        copyToSandbox: options.copyToSandbox,
+        copyToWorktree: options.copyToWorktree,
         name: options.name,
         sandboxProvider: options.sandbox,
+        branchStrategy,
+        throwOnDuplicateWorktree: options.throwOnDuplicateWorktree,
       }),
       NodeFileSystem.layer,
       displayLayer,
@@ -281,64 +309,83 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
 
   const runLayer = Layer.merge(factoryLayer, displayLayer);
 
+  const baseEffect = Effect.gen(function* () {
+    const d = yield* Display;
+    yield* d.intro(options.name ?? "sandcastle");
+    const rows = buildRunSummaryRows({
+      name: options.name,
+      agentName,
+      sandboxName: options.sandbox.name,
+      maxIterations,
+      branch: resolvedBranch,
+    });
+    yield* d.summary("Sandcastle Run", rows);
+
+    // Validate that the user has not provided built-in prompt argument keys
+    const userArgs = options.promptArgs ?? {};
+    yield* validateNoBuiltInArgOverride(userArgs);
+
+    // Build effective args: built-in args merged with user-provided args.
+    // In none mode, resolvedBranch is already currentHostBranch, so
+    // SOURCE_BRANCH and TARGET_BRANCH both resolve to the host's current branch.
+    const effectiveArgs = {
+      SOURCE_BRANCH: resolvedBranch,
+      TARGET_BRANCH: currentHostBranch,
+      ...userArgs,
+    };
+    const builtInArgKeysSet = new Set<string>(BUILT_IN_PROMPT_ARG_KEYS);
+    const resolvedPrompt = yield* substitutePromptArgs(
+      rawPrompt,
+      effectiveArgs,
+      builtInArgKeysSet,
+    );
+
+    // In head mode, pass the host branch so SandboxLifecycle skips the merge step.
+    // In merge-to-head mode, branch is undefined (triggers merge). In branch mode, it's the explicit branch.
+    const orchestrateBranch =
+      effectiveBranchType === "head" ? currentHostBranch : branch;
+
+    const orchestrateResult = yield* orchestrate({
+      hostRepoDir,
+      iterations: maxIterations,
+      hooks,
+      prompt: resolvedPrompt,
+      branch: orchestrateBranch,
+      provider,
+      completionSignal: options.completionSignal,
+      idleTimeoutSeconds: options.idleTimeoutSeconds,
+      name: options.name,
+    });
+
+    const completion = buildCompletionMessage(
+      orchestrateResult.completionSignal,
+      orchestrateResult.iterationsRun,
+    );
+    yield* d.status(completion.message, completion.severity);
+
+    return orchestrateResult;
+  });
+
+  // In file-logging mode, write errors to the log before they propagate.
+  // In stdout mode (ClackDisplay), errors are already shown by withFriendlyErrors
+  // in main.ts, so we skip to avoid duplicate terminal output.
+  const withErrorLog =
+    resolvedLogging.type === "file"
+      ? baseEffect.pipe(
+          Effect.tapError((error) =>
+            Effect.gen(function* () {
+              const d = yield* Display;
+              yield* d.status(
+                formatErrorMessage(error as SandboxError),
+                "error",
+              );
+            }),
+          ),
+        )
+      : baseEffect;
+
   const result = await Effect.runPromise(
-    Effect.gen(function* () {
-      const d = yield* Display;
-      yield* d.intro(options.name ?? "sandcastle");
-      const rows = buildRunSummaryRows({
-        name: options.name,
-        agentName,
-        sandboxName: options.sandbox.name,
-        maxIterations,
-        branch: resolvedBranch,
-      });
-      yield* d.summary("Sandcastle Run", rows);
-
-      // Validate that the user has not provided built-in prompt argument keys
-      const userArgs = options.promptArgs ?? {};
-      yield* validateNoBuiltInArgOverride(userArgs);
-
-      // Build effective args: built-in args merged with user-provided args.
-      // In none mode, resolvedBranch is already currentHostBranch, so
-      // SOURCE_BRANCH and TARGET_BRANCH both resolve to the host's current branch.
-      const effectiveArgs = {
-        SOURCE_BRANCH: resolvedBranch,
-        TARGET_BRANCH: currentHostBranch,
-        ...userArgs,
-      };
-      const builtInArgKeysSet = new Set<string>(BUILT_IN_PROMPT_ARG_KEYS);
-      const resolvedPrompt = yield* substitutePromptArgs(
-        rawPrompt,
-        effectiveArgs,
-        builtInArgKeysSet,
-      );
-
-      // In head mode, pass the host branch so SandboxLifecycle skips the merge step.
-      // In merge-to-head mode, branch is undefined (triggers merge). In branch mode, it's the explicit branch.
-      const orchestrateBranch =
-        effectiveBranchType === "head" ? currentHostBranch : branch;
-
-      const orchestrateResult = yield* orchestrate({
-        hostRepoDir,
-        sandboxRepoDir: SANDBOX_WORKSPACE_DIR,
-        iterations: maxIterations,
-        hooks,
-        prompt: resolvedPrompt,
-        branch: orchestrateBranch,
-        provider,
-        completionSignal: options.completionSignal,
-        idleTimeoutSeconds: options.idleTimeoutSeconds,
-        name: options.name,
-      });
-
-      const completion = buildCompletionMessage(
-        orchestrateResult.completionSignal,
-        orchestrateResult.iterationsRun,
-      );
-      yield* d.status(completion.message, completion.severity);
-
-      return orchestrateResult;
-    }).pipe(Effect.provide(runLayer)),
+    withErrorLog.pipe(Effect.provide(runLayer)),
   );
 
   return {

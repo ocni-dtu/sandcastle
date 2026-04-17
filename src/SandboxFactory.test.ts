@@ -6,13 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { AgentError, TimeoutError, WorktreeError } from "./errors.js";
+import { AgentError, AgentIdleTimeoutError, WorktreeError } from "./errors.js";
 import { SilentDisplay, type DisplayEntry } from "./Display.js";
 import {
   createBindMountSandboxProvider,
   type SandboxProvider,
   type BindMountSandboxHandle,
-  type BindMountBranchStrategy,
+  type BranchStrategy,
 } from "./SandboxProvider.js";
 import { testIsolated } from "./sandboxes/test-isolated.js";
 
@@ -29,7 +29,7 @@ import {
   SandboxFactory,
   SandboxConfig,
   WorktreeDockerSandboxFactory,
-  SANDBOX_WORKSPACE_DIR,
+  SANDBOX_REPO_DIR,
 } from "./SandboxFactory.js";
 
 const mockCreate = vi.mocked(WorktreeManager.create);
@@ -40,9 +40,7 @@ const mockHasUncommittedChanges = vi.mocked(
 );
 
 /** Create a mock sandbox provider that records calls and delegates to a no-op handle. */
-const makeMockProvider = (
-  branchStrategy?: BindMountBranchStrategy,
-): {
+const makeMockProvider = (): {
   provider: SandboxProvider;
   createCalls: any[];
   closeCalls: number;
@@ -51,13 +49,11 @@ const makeMockProvider = (
   let closeCalls = 0;
   const provider = createBindMountSandboxProvider({
     name: "test-provider",
-    branchStrategy,
     create: async (options) => {
       createCalls.push(options);
       const handle: BindMountSandboxHandle = {
-        workspacePath: SANDBOX_WORKSPACE_DIR,
+        worktreePath: SANDBOX_REPO_DIR,
         exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-        execStreaming: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
         close: async () => {
           closeCalls++;
         },
@@ -94,6 +90,7 @@ describe("WorktreeDockerSandboxFactory", () => {
 
   const makeLayer = (
     displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
+    branchStrategy: BranchStrategy = { type: "merge-to-head" },
   ) =>
     Layer.provide(
       WorktreeDockerSandboxFactory.layer,
@@ -102,6 +99,7 @@ describe("WorktreeDockerSandboxFactory", () => {
           env: { FOO: "bar" },
           hostRepoDir,
           sandboxProvider: mockProvider.provider,
+          branchStrategy,
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(displayRef),
@@ -110,7 +108,7 @@ describe("WorktreeDockerSandboxFactory", () => {
 
   beforeEach(async () => {
     hostRepoDir = await makeTempRepo();
-    mockProvider = makeMockProvider({ type: "merge-to-head" });
+    mockProvider = makeMockProvider();
     mockCreate.mockReturnValue(
       Effect.succeed({
         path: worktreePath,
@@ -130,23 +128,10 @@ describe("WorktreeDockerSandboxFactory", () => {
     tempDirs.length = 0;
   });
 
-  it("passes branch from provider's branchStrategy to WorktreeManager.create when branch is specified", async () => {
-    const branchProvider = createBindMountSandboxProvider({
-      name: "test-provider",
-      branchStrategy: { type: "branch", branch: "feature/my-branch" },
-      create: mockProvider.provider.create,
-    });
-    const layerWithBranch = Layer.provide(
-      WorktreeDockerSandboxFactory.layer,
-      Layer.mergeAll(
-        Layer.succeed(SandboxConfig, {
-          env: {},
-          hostRepoDir,
-          sandboxProvider: branchProvider,
-        }),
-        NodeFileSystem.layer,
-        SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
-      ),
+  it("passes branch from branchStrategy config to WorktreeManager.create when branch is specified", async () => {
+    const layerWithBranch = makeLayer(
+      Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
+      { type: "branch", branch: "feature/my-branch" },
     );
 
     await Effect.runPromise(
@@ -182,7 +167,7 @@ describe("WorktreeDockerSandboxFactory", () => {
         return { path: worktreePath, branch: "sandcastle/20240101-000000" };
       }),
     );
-    const { provider } = makeMockProvider({ type: "merge-to-head" });
+    const { provider } = makeMockProvider();
     const origCreate = provider.create;
     (provider as any).create = async (opts: any) => {
       callOrder.push("provider-create");
@@ -196,6 +181,7 @@ describe("WorktreeDockerSandboxFactory", () => {
           env: { FOO: "bar" },
           hostRepoDir,
           sandboxProvider: provider,
+          branchStrategy: { type: "merge-to-head" },
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
@@ -227,7 +213,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     // Should include worktree mount
     expect(opts.mounts).toContainEqual({
       hostPath: worktreePath,
-      sandboxPath: SANDBOX_WORKSPACE_DIR,
+      sandboxPath: SANDBOX_REPO_DIR,
     });
     // Should include git mount
     expect(opts.mounts).toContainEqual({
@@ -335,14 +321,17 @@ describe("WorktreeDockerSandboxFactory", () => {
     expect(mockProvider.closeCalls).toBe(1);
   });
 
-  it("attaches preservedWorktreePath to TimeoutError on failure with dirty worktree", async () => {
+  it("attaches preservedWorktreePath to AgentIdleTimeoutError on failure with dirty worktree", async () => {
     mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
         yield* factory.withSandbox(() =>
           Effect.fail(
-            new TimeoutError({ message: "timed out", idleTimeoutSeconds: 30 }),
+            new AgentIdleTimeoutError({
+              message: "timed out",
+              timeoutMs: 30_000,
+            }),
           ),
         );
       }).pipe(Effect.provide(makeLayer())),
@@ -352,10 +341,10 @@ describe("WorktreeDockerSandboxFactory", () => {
     if (!Exit.isFailure(exit)) throw new Error("unreachable");
     expect(exit.cause._tag).toBe("Fail");
     if (exit.cause._tag !== "Fail") throw new Error("unreachable");
-    expect(exit.cause.error).toBeInstanceOf(TimeoutError);
-    expect((exit.cause.error as TimeoutError).preservedWorktreePath).toBe(
-      worktreePath,
-    );
+    expect(exit.cause.error).toBeInstanceOf(AgentIdleTimeoutError);
+    expect(
+      (exit.cause.error as AgentIdleTimeoutError).preservedWorktreePath,
+    ).toBe(worktreePath);
   });
 
   it("attaches preservedWorktreePath to AgentError on failure with dirty worktree", async () => {
@@ -379,7 +368,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     );
   });
 
-  it("logs copy-to-sandbox as a spinner when copyToSandbox paths are provided", async () => {
+  it("logs copy-to-sandbox as a spinner when copyToWorktree paths are provided", async () => {
     const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
     const layerWithCopy = Layer.provide(
       WorktreeDockerSandboxFactory.layer,
@@ -387,16 +376,17 @@ describe("WorktreeDockerSandboxFactory", () => {
         Layer.succeed(SandboxConfig, {
           env: {},
           hostRepoDir,
-          copyToSandbox: ["node_modules"],
+          copyToWorktree: ["node_modules"],
           sandboxProvider: mockProvider.provider,
+          branchStrategy: { type: "merge-to-head" },
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(ref),
       ),
     );
 
-    vi.mock("./CopyToSandbox.js", () => ({
-      copyToSandbox: vi.fn(() => Effect.succeed(undefined)),
+    vi.mock("./CopyToWorktree.js", () => ({
+      copyToWorktree: vi.fn(() => Effect.succeed(undefined)),
     }));
 
     await Effect.runPromise(
@@ -408,7 +398,7 @@ describe("WorktreeDockerSandboxFactory", () => {
 
     const entries = await Effect.runPromise(Ref.get(ref));
     const spinnerEntry = entries.find(
-      (e) => e._tag === "spinner" && e.message === "Copying to sandbox",
+      (e) => e._tag === "spinner" && e.message === "Copying to worktree",
     );
     expect(spinnerEntry).toBeDefined();
   });
@@ -498,14 +488,17 @@ describe("WorktreeDockerSandboxFactory", () => {
     stderrSpy.mockRestore();
   });
 
-  it("does not attach preservedWorktreePath to TimeoutError when worktree is clean on failure", async () => {
+  it("does not attach preservedWorktreePath to AgentIdleTimeoutError when worktree is clean on failure", async () => {
     mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
         yield* factory.withSandbox(() =>
           Effect.fail(
-            new TimeoutError({ message: "timed out", idleTimeoutSeconds: 30 }),
+            new AgentIdleTimeoutError({
+              message: "timed out",
+              timeoutMs: 30_000,
+            }),
           ),
         );
       }).pipe(Effect.provide(makeLayer())),
@@ -515,35 +508,16 @@ describe("WorktreeDockerSandboxFactory", () => {
     if (!Exit.isFailure(exit)) throw new Error("unreachable");
     expect(exit.cause._tag).toBe("Fail");
     if (exit.cause._tag !== "Fail") throw new Error("unreachable");
-    expect(exit.cause.error).toBeInstanceOf(TimeoutError);
+    expect(exit.cause.error).toBeInstanceOf(AgentIdleTimeoutError);
     expect(
-      (exit.cause.error as TimeoutError).preservedWorktreePath,
+      (exit.cause.error as AgentIdleTimeoutError).preservedWorktreePath,
     ).toBeUndefined();
   });
 
   describe("head branch strategy", () => {
-    const makeHeadProvider = () =>
-      createBindMountSandboxProvider({
-        name: "test-provider",
-        branchStrategy: { type: "head" },
-        create: mockProvider.provider.create,
-      });
-
     const makeHeadLayer = (
       displayRef = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
-    ) =>
-      Layer.provide(
-        WorktreeDockerSandboxFactory.layer,
-        Layer.mergeAll(
-          Layer.succeed(SandboxConfig, {
-            env: { FOO: "bar" },
-            hostRepoDir,
-            sandboxProvider: makeHeadProvider(),
-          }),
-          NodeFileSystem.layer,
-          SilentDisplay.layer(displayRef),
-        ),
-      );
+    ) => makeLayer(displayRef, { type: "head" });
 
     it("does not create or remove a worktree", async () => {
       await Effect.runPromise(
@@ -570,7 +544,7 @@ describe("WorktreeDockerSandboxFactory", () => {
       const opts = mockProvider.createCalls[0];
       expect(opts.mounts).toContainEqual({
         hostPath: hostRepoDir,
-        sandboxPath: SANDBOX_WORKSPACE_DIR,
+        sandboxPath: SANDBOX_REPO_DIR,
       });
       expect(opts.mounts).toContainEqual({
         hostPath: `${hostRepoDir}/.git`,
@@ -590,7 +564,7 @@ describe("WorktreeDockerSandboxFactory", () => {
       expect(result.value).toBe("done");
     });
 
-    it("does not pass hostWorktreePath to the effect", async () => {
+    it("passes hostWorktreePath pointing to host repo dir", async () => {
       let receivedInfo: { hostWorktreePath?: string } | undefined;
       await Effect.runPromise(
         Effect.gen(function* () {
@@ -602,7 +576,7 @@ describe("WorktreeDockerSandboxFactory", () => {
         }).pipe(Effect.provide(makeHeadLayer())),
       );
 
-      expect(receivedInfo?.hostWorktreePath).toBeUndefined();
+      expect(receivedInfo?.hostWorktreePath).toBe(hostRepoDir);
     });
   });
 
@@ -643,20 +617,31 @@ const commitFile = async (
 describe("WorktreeDockerSandboxFactory — isolated providers", () => {
   const tempDirs: string[] = [];
 
-  const makeIsolatedLayer = (hostRepoDir: string, copyToSandbox?: string[]) =>
+  const makeIsolatedLayer = (hostRepoDir: string, copyToWorktree?: string[]) =>
     Layer.provide(
       WorktreeDockerSandboxFactory.layer,
       Layer.mergeAll(
         Layer.succeed(SandboxConfig, {
           env: {},
           hostRepoDir,
-          copyToSandbox,
+          copyToWorktree,
           sandboxProvider: testIsolated(),
+          branchStrategy: { type: "merge-to-head" },
         }),
         NodeFileSystem.layer,
         SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
       ),
     );
+
+  /** Set up WorktreeManager mocks so the worktree path points at the real repo. */
+  const setupWorktreeMocks = (hostDir: string) => {
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "sandcastle/20240101-000000" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+  };
 
   afterEach(async () => {
     await Promise.all(
@@ -665,11 +650,12 @@ describe("WorktreeDockerSandboxFactory — isolated providers", () => {
     tempDirs.length = 0;
   });
 
-  it("copies copyToSandbox files into the isolated sandbox via copyIn", async () => {
+  it("copies copyToWorktree files into the isolated sandbox via copyIn", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
     tempDirs.push(hostDir);
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial");
+    setupWorktreeMocks(hostDir);
 
     // Create a file to copy (not tracked by git)
     await writeFile(join(hostDir, "extra.txt"), "extra content");
@@ -691,11 +677,12 @@ describe("WorktreeDockerSandboxFactory — isolated providers", () => {
     expect(fileContent).toBe("extra content");
   });
 
-  it("copies nested copyToSandbox paths, creating parent directories", async () => {
+  it("copies nested copyToWorktree paths, creating parent directories", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
     tempDirs.push(hostDir);
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial");
+    setupWorktreeMocks(hostDir);
 
     // Create a nested file to copy
     await mkdir(join(hostDir, "subdir"), { recursive: true });
@@ -720,11 +707,12 @@ describe("WorktreeDockerSandboxFactory — isolated providers", () => {
     expect(fileContent).toBe('{"key":"value"}');
   });
 
-  it("works without copyToSandbox (no regression)", async () => {
+  it("works without copyToWorktree (no regression)", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
     tempDirs.push(hostDir);
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello world", "initial");
+    setupWorktreeMocks(hostDir);
 
     let fileContent = "";
     await Effect.runPromise(
@@ -743,11 +731,45 @@ describe("WorktreeDockerSandboxFactory — isolated providers", () => {
     expect(fileContent).toBe("hello world");
   });
 
-  it("skips missing copyToSandbox paths without error", async () => {
+  it("copies copyToWorktree directories into the isolated sandbox via copyIn", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
     tempDirs.push(hostDir);
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial");
+    setupWorktreeMocks(hostDir);
+
+    // Create a directory to copy (not tracked by git)
+    await mkdir(join(hostDir, "config", "nested"), { recursive: true });
+    await writeFile(join(hostDir, "config", "a.json"), '{"a":1}');
+    await writeFile(join(hostDir, "config", "nested", "b.json"), '{"b":2}');
+
+    let contentA = "";
+    let contentB = "";
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() =>
+          Effect.gen(function* () {
+            const sandbox = yield* Sandbox;
+            contentA = (yield* sandbox.exec("cat config/a.json")).stdout.trim();
+            contentB = (yield* sandbox.exec(
+              "cat config/nested/b.json",
+            )).stdout.trim();
+          }),
+        );
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir, ["config"]))),
+    );
+
+    expect(contentA).toBe('{"a":1}');
+    expect(contentB).toBe('{"b":2}');
+  });
+
+  it("skips missing copyToWorktree paths without error", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+    setupWorktreeMocks(hostDir);
 
     // Request a file that doesn't exist — should not fail
     await Effect.runPromise(
@@ -758,18 +780,227 @@ describe("WorktreeDockerSandboxFactory — isolated providers", () => {
     );
   });
 
-  it("reads branchStrategy from isolated provider (defaults to merge-to-head)", () => {
+  it("isolated provider does not have a branchStrategy property", () => {
     const provider = testIsolated();
-    expect(provider.branchStrategy).toEqual({ type: "merge-to-head" });
+    expect("branchStrategy" in provider).toBe(false);
   });
 
-  it("accepts explicit branchStrategy on testIsolated()", () => {
-    const provider = testIsolated({
-      branchStrategy: { type: "branch", branch: "feature/foo" },
+  it("creates a worktree before starting the isolated sandbox", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "sandcastle/20240101-000000" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+    );
+
+    expect(mockCreate).toHaveBeenCalledWith(hostDir, { name: undefined });
+  });
+
+  it("creates a worktree with a named branch for branch strategy", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "feature/my-branch" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    const layer = Layer.provide(
+      WorktreeDockerSandboxFactory.layer,
+      Layer.mergeAll(
+        Layer.succeed(SandboxConfig, {
+          env: {},
+          hostRepoDir: hostDir,
+          sandboxProvider: testIsolated(),
+          branchStrategy: { type: "branch", branch: "feature/my-branch" },
+        }),
+        NodeFileSystem.layer,
+        SilentDisplay.layer(Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([])),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(mockCreate).toHaveBeenCalledWith(hostDir, {
+      branch: "feature/my-branch",
     });
-    expect(provider.branchStrategy).toEqual({
-      type: "branch",
-      branch: "feature/foo",
+  });
+
+  it("provides hostWorktreePath in SandboxInfo", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    const fakeWorktreePath = hostDir;
+    mockCreate.mockReturnValue(
+      Effect.succeed({
+        path: fakeWorktreePath,
+        branch: "sandcastle/20240101-000000",
+      }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    let receivedInfo: { hostWorktreePath?: string } | undefined;
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox((info) => {
+          receivedInfo = info;
+          return Effect.void;
+        });
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+    );
+
+    expect(receivedInfo?.hostWorktreePath).toBe(fakeWorktreePath);
+  });
+
+  it("removes worktree on success with clean worktree", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "sandcastle/20240101-000000" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+    );
+
+    expect(mockRemove).toHaveBeenCalledWith(hostDir);
+  });
+
+  it("preserves worktree on failure with dirty worktree", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "sandcastle/20240101-000000" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const factory = yield* SandboxFactory;
+          yield* factory.withSandbox(() => Effect.die("boom"));
+        }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+      ),
+    ).rejects.toThrow();
+
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it("prunes stale worktrees before creating a new one", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    const callOrder: string[] = [];
+    mockPruneStale.mockImplementation(() =>
+      Effect.sync(() => {
+        callOrder.push("pruneStale");
+      }),
+    );
+    mockCreate.mockImplementation(() =>
+      Effect.sync(() => {
+        callOrder.push("create");
+        return { path: hostDir, branch: "sandcastle/20240101-000000" };
+      }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+    );
+
+    expect(callOrder.indexOf("pruneStale")).toBeLessThan(
+      callOrder.indexOf("create"),
+    );
+  });
+
+  it("provides applyToHost callback that syncs commits to worktree", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-test-"));
+    tempDirs.push(hostDir);
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial");
+
+    // Use hostDir as worktree path — applyToHost runs syncOut targeting the worktree
+    mockCreate.mockReturnValue(
+      Effect.succeed({ path: hostDir, branch: "sandcastle/20240101-000000" }),
+    );
+    mockRemove.mockReturnValue(Effect.void);
+    mockPruneStale.mockReturnValue(Effect.void);
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    // The sandbox makes a commit inside the sandbox. Calling applyToHost should
+    // run syncOut which lands the commit on the worktree (hostDir in this test).
+    let commitMade = false;
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox((info) =>
+          Effect.gen(function* () {
+            const sandbox = yield* Sandbox;
+            yield* sandbox.exec(
+              'git config user.email "test@test.com" && git config user.name "Test"',
+            );
+            yield* sandbox.exec(
+              'echo "new content" > new-file.txt && git add new-file.txt && git commit -m "sandbox commit"',
+            );
+            commitMade = true;
+            // Caller (lifecycle) is responsible for calling applyToHost
+            yield* info.applyToHost();
+          }),
+        );
+      }).pipe(Effect.provide(makeIsolatedLayer(hostDir))),
+    );
+
+    expect(commitMade).toBe(true);
+    // Verify the commit landed on the worktree (hostDir)
+    const { stdout } = await execAsync("git log --oneline -1", {
+      cwd: hostDir,
     });
+    expect(stdout).toContain("sandbox commit");
   });
 });

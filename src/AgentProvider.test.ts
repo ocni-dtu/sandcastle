@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { claudeCode, codex, junie, pi } from "./AgentProvider.js";
+import { claudeCode, codex, opencode, pi, junie } from "./AgentProvider.js";
+import type { AgentCommandOptions } from "./AgentProvider.js";
+
+/** Shorthand: build options with dangerouslySkipPermissions: true (mirrors existing sandbox callers). */
+const opts = (prompt: string): AgentCommandOptions => ({
+  prompt,
+  dangerouslySkipPermissions: true,
+});
 
 describe("claudeCode factory", () => {
   it("returns a provider with name 'claude-code'", () => {
@@ -15,7 +22,7 @@ describe("claudeCode factory", () => {
 
   it("buildPrintCommand includes the model", () => {
     const provider = claudeCode("claude-sonnet-4-6");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("claude-sonnet-4-6");
     expect(command).toContain("--output-format stream-json");
     expect(command).toContain("--print");
@@ -23,23 +30,15 @@ describe("claudeCode factory", () => {
 
   it("buildPrintCommand shell-escapes the prompt", () => {
     const provider = claudeCode("claude-opus-4-6");
-    const command = provider.buildPrintCommand("it's a test");
+    const command = provider.buildPrintCommand(opts("it's a test"));
     // Single-quoted shell escaping: ' -> '\''
     expect(command).toContain("'it'\\''s a test'");
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
     const provider = claudeCode("claude-opus-4-6");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--model 'claude-opus-4-6'");
-  });
-
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = claudeCode("claude-sonnet-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("claude");
-    expect(args).toContain("claude-sonnet-4-6");
-    expect(args).toContain("--model");
   });
 
   it("parseStreamLine extracts text from assistant message", () => {
@@ -91,49 +90,86 @@ describe("claudeCode factory", () => {
   it("parseStreamLine bakes model into each provider instance independently", () => {
     const provider1 = claudeCode("model-a");
     const provider2 = claudeCode("model-b");
-    expect(provider1.buildPrintCommand("test")).toContain("model-a");
-    expect(provider2.buildPrintCommand("test")).toContain("model-b");
-    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).toContain("model-a");
+    expect(provider2.buildPrintCommand(opts("test"))).toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).not.toContain("model-b");
   });
 
   it("buildPrintCommand includes --effort when specified", () => {
     const provider = claudeCode("claude-opus-4-6", { effort: "high" });
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--effort high");
   });
 
   it("buildPrintCommand omits --effort when not specified", () => {
     const provider = claudeCode("claude-opus-4-6");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
   });
 
   it("buildPrintCommand omits --effort when options is empty", () => {
     const provider = claudeCode("claude-opus-4-6", {});
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
-  });
-
-  it("buildInteractiveArgs includes --effort when specified", () => {
-    const provider = claudeCode("claude-opus-4-6", { effort: "low" });
-    const args = provider.buildInteractiveArgs("");
-    expect(args).toContain("--effort");
-    expect(args).toContain("low");
-  });
-
-  it("buildInteractiveArgs omits --effort when not specified", () => {
-    const provider = claudeCode("claude-opus-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args).not.toContain("--effort");
   });
 
   it("supports all effort levels", () => {
     for (const effort of ["low", "medium", "high", "max"] as const) {
       const provider = claudeCode("claude-opus-4-6", { effort });
-      expect(provider.buildPrintCommand("test")).toContain(
+      expect(provider.buildPrintCommand(opts("test"))).toContain(
         `--effort ${effort}`,
       );
     }
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = claudeCode("claude-opus-4-6", {
+      env: { ANTHROPIC_API_KEY: "sk-test" },
+    });
+    expect(provider.env).toEqual({ ANTHROPIC_API_KEY: "sk-test" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    expect(provider.env).toEqual({});
+  });
+
+  // --- dangerouslySkipPermissions conditional tests ---
+
+  it("buildPrintCommand includes --dangerously-skip-permissions when true", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    const command = provider.buildPrintCommand({
+      prompt: "test",
+      dangerouslySkipPermissions: true,
+    });
+    expect(command).toContain("--dangerously-skip-permissions");
+  });
+
+  it("buildPrintCommand omits --dangerously-skip-permissions when false", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    const command = provider.buildPrintCommand({
+      prompt: "test",
+      dangerouslySkipPermissions: false,
+    });
+    expect(command).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("buildInteractiveArgs includes --dangerously-skip-permissions when true", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    const args = provider.buildInteractiveArgs!({
+      prompt: "test",
+      dangerouslySkipPermissions: true,
+    });
+    expect(args).toContain("--dangerously-skip-permissions");
+  });
+
+  it("buildInteractiveArgs omits --dangerously-skip-permissions when false", () => {
+    const provider = claudeCode("claude-opus-4-6");
+    const args = provider.buildInteractiveArgs!({
+      prompt: "test",
+      dangerouslySkipPermissions: false,
+    });
+    expect(args).not.toContain("--dangerously-skip-permissions");
   });
 });
 
@@ -155,7 +191,7 @@ describe("pi factory", () => {
 
   it("buildPrintCommand includes the model and pi flags", () => {
     const provider = pi("claude-sonnet-4-6");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("claude-sonnet-4-6");
     expect(command).toContain("--mode json");
     expect(command).toContain("--no-session");
@@ -164,22 +200,14 @@ describe("pi factory", () => {
 
   it("buildPrintCommand shell-escapes the prompt", () => {
     const provider = pi("claude-sonnet-4-6");
-    const command = provider.buildPrintCommand("it's a test");
+    const command = provider.buildPrintCommand(opts("it's a test"));
     expect(command).toContain("'it'\\''s a test'");
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
     const provider = pi("claude-sonnet-4-6");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--model 'claude-sonnet-4-6'");
-  });
-
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = pi("claude-sonnet-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("pi");
-    expect(args).toContain("claude-sonnet-4-6");
-    expect(args).toContain("--model");
   });
 
   it("parseStreamLine extracts text from message_update event", () => {
@@ -276,9 +304,19 @@ describe("pi factory", () => {
   it("bakes model into each provider instance independently", () => {
     const provider1 = pi("model-a");
     const provider2 = pi("model-b");
-    expect(provider1.buildPrintCommand("test")).toContain("model-a");
-    expect(provider2.buildPrintCommand("test")).toContain("model-b");
-    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).toContain("model-a");
+    expect(provider2.buildPrintCommand(opts("test"))).toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).not.toContain("model-b");
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = pi("claude-sonnet-4-6", { env: { PI_KEY: "abc" } });
+    expect(provider.env).toEqual({ PI_KEY: "abc" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = pi("claude-sonnet-4-6");
+    expect(provider.env).toEqual({});
   });
 });
 
@@ -300,31 +338,43 @@ describe("codex factory", () => {
 
   it("buildPrintCommand includes the model and --json flag", () => {
     const provider = codex("gpt-5.4-mini");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("gpt-5.4-mini");
     expect(command).toContain("--json");
   });
 
   it("buildPrintCommand shell-escapes the prompt", () => {
     const provider = codex("gpt-5.4-mini");
-    const command = provider.buildPrintCommand("it's a test");
+    const command = provider.buildPrintCommand(opts("it's a test"));
     expect(command).toContain("'it'\\''s a test'");
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
     const provider = codex("gpt-5.4-mini");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("-m 'gpt-5.4-mini'");
   });
 
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = codex("gpt-5.4-mini");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("codex");
-    expect(args).toContain("gpt-5.4-mini");
-    expect(args).toContain("--model");
+  it("buildPrintCommand includes model reasoning effort config when specified", () => {
+    const provider = codex("gpt-5.4-mini", { effort: "high" });
+    const command = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain(`-c 'model_reasoning_effort="high"'`);
   });
 
+  it("buildPrintCommand omits model reasoning effort config when not specified", () => {
+    const provider = codex("gpt-5.4-mini");
+    const command = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("model_reasoning_effort");
+  });
+
+  it("supports all codex effort levels", () => {
+    for (const effort of ["low", "medium", "high", "xhigh"] as const) {
+      const provider = codex("gpt-5.4-mini", { effort });
+      expect(provider.buildPrintCommand(opts("test"))).toContain(
+        `model_reasoning_effort="${effort}"`,
+      );
+    }
+  });
   it("parseStreamLine extracts text and result from item.completed agent_message", () => {
     const provider = codex("gpt-5.4-mini");
     const line = JSON.stringify({
@@ -410,9 +460,101 @@ describe("codex factory", () => {
   it("bakes model into each provider instance independently", () => {
     const provider1 = codex("model-a");
     const provider2 = codex("model-b");
-    expect(provider1.buildPrintCommand("test")).toContain("model-a");
-    expect(provider2.buildPrintCommand("test")).toContain("model-b");
-    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).toContain("model-a");
+    expect(provider2.buildPrintCommand(opts("test"))).toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).not.toContain("model-b");
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = codex("gpt-5.4-mini", { env: { OPENAI_KEY: "xyz" } });
+    expect(provider.env).toEqual({ OPENAI_KEY: "xyz" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = codex("gpt-5.4-mini");
+    expect(provider.env).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// opencode factory
+// ---------------------------------------------------------------------------
+
+describe("opencode factory", () => {
+  it("returns a provider with name 'opencode'", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider.name).toBe("opencode");
+  });
+
+  it("does not expose envManifest or dockerfileTemplate", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider).not.toHaveProperty("envManifest");
+    expect(provider).not.toHaveProperty("dockerfileTemplate");
+  });
+
+  it("buildPrintCommand includes the model and prompt", () => {
+    const provider = opencode("opencode/big-pickle");
+    const command = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain("opencode run");
+    expect(command).toContain("opencode/big-pickle");
+  });
+
+  it("buildPrintCommand does not include --format json", () => {
+    const provider = opencode("opencode/big-pickle");
+    const command = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("--format json");
+    expect(command).not.toContain("--format");
+  });
+
+  it("buildPrintCommand shell-escapes the prompt", () => {
+    const provider = opencode("opencode/big-pickle");
+    const command = provider.buildPrintCommand(opts("it's a test"));
+    expect(command).toContain("'it'\\''s a test'");
+  });
+
+  it("buildPrintCommand shell-escapes the model", () => {
+    const provider = opencode("opencode/big-pickle");
+    const command = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain("--model 'opencode/big-pickle'");
+  });
+
+  it("parseStreamLine returns empty array for all input (raw passthrough)", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider.parseStreamLine("some output text")).toEqual([]);
+    expect(provider.parseStreamLine("")).toEqual([]);
+    expect(
+      provider.parseStreamLine(JSON.stringify({ type: "text", text: "hi" })),
+    ).toEqual([]);
+  });
+
+  it("parseStreamLine returns empty array for non-JSON lines", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider.parseStreamLine("not json")).toEqual([]);
+  });
+
+  it("parseStreamLine returns empty array for malformed JSON", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider.parseStreamLine("{bad json")).toEqual([]);
+  });
+
+  it("bakes model into each provider instance independently", () => {
+    const provider1 = opencode("model-a");
+    const provider2 = opencode("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).toContain("model-a");
+    expect(provider2.buildPrintCommand(opts("test"))).toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).not.toContain("model-b");
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = opencode("opencode/big-pickle", {
+      env: { OPENCODE_API_KEY: "sk-test" },
+    });
+    expect(provider.env).toEqual({ OPENCODE_API_KEY: "sk-test" });
+  });
+
+  it("defaults env to empty object when not provided", () => {
+    const provider = opencode("opencode/big-pickle");
+    expect(provider.env).toEqual({});
   });
 });
 

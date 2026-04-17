@@ -138,7 +138,10 @@ export const FileDisplay = {
         yield* fs
           .makeDirectory(dirname(filePath), { recursive: true })
           .pipe(Effect.orDie);
-        yield* fs.writeFileString(filePath, "").pipe(Effect.orDie);
+        const delimiter = `\n--- Run started: ${new Date().toISOString()} ---\n`;
+        yield* fs
+          .writeFileString(filePath, delimiter, { flag: "a" })
+          .pipe(Effect.orDie);
 
         const appendToLog = (line: string): Effect.Effect<void> =>
           fs

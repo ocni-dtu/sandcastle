@@ -1,5 +1,41 @@
 Wherever possible, use Effect primitives like `FileSystem` over promises. This is so that we can make use of DI and type-safe errors from Effect. However, Effect should not leak out into the user-facing API.
 
+Even if the outer function is a promise (such as in user-facing API's) the inner function should immediately delegate to Effect. Running multiple `.runPromise`'s inside a single function should be a red flag that we need to refactor to something like this:
+
+```ts
+const outerFunc = async () => {
+  const inner = Effect.gen(function* () {
+    // Do stuff in here
+  }).pipe(Effect.runPromise);
+};
+```
+
+---
+
+Before writing a changeset, explore other potentially related changesets so you don't duplicate effort.
+
+You may write more than one changeset per commit, if the commit touches multiple user-facing behaviors.
+
+---
+
+When writing sandbox providers, don't use any shared abstractions between them. Each provider, for instance Vercel and Daytona, is a different concern and shouldn't share code.
+
+---
+
+`exec` with an `onLine` callback must call `onLine` in real-time as output arrives, not after the command completes. The orchestrator uses `onLine` callbacks to reset an idle timeout — if lines aren't emitted during execution, the timeout will fire prematurely or hangs won't be detected. Always use a streaming/WebSocket-based API from the underlying SDK, never execute-then-split.
+
+---
+
+Any public-facing properties or functions should have JSDOC comments explaining them.
+
+---
+
+Do not use lazy `import()`-style imports when importing Node built-ins. Just use imports.
+
+---
+
+Optional parameters passed to functions should be scrutinised extremely carefully. They are a huge source of bugs (by omission). Prioritise correctness over backwards compatibility.
+
 ---
 
 ## Testing

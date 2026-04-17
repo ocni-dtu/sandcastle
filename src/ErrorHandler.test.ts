@@ -4,6 +4,7 @@ import { Display, SilentDisplay } from "./Display.js";
 import type { DisplayEntry } from "./Display.js";
 import {
   AgentError,
+  AgentIdleTimeoutError,
   ConfigDirError,
   CopyError,
   DockerError,
@@ -12,7 +13,6 @@ import {
   InitError,
   PromptError,
   SyncError,
-  TimeoutError,
   WorktreeError,
 } from "./errors.js";
 import { formatErrorMessage, withFriendlyErrors } from "./ErrorHandler.js";
@@ -96,12 +96,12 @@ describe("formatErrorMessage", () => {
     expect(msg).toContain("Unknown template");
   });
 
-  it("TimeoutError passes through message", () => {
+  it("AgentIdleTimeoutError passes through message", () => {
     const msg = formatErrorMessage(
-      new TimeoutError({
+      new AgentIdleTimeoutError({
         message:
           "Agent idle for 1200 seconds — no output received. Consider increasing the idle timeout with --idle-timeout.",
-        idleTimeoutSeconds: 1200,
+        timeoutMs: 1_200_000,
       }),
     );
     expect(msg).toContain("1200");
@@ -163,14 +163,14 @@ describe("withFriendlyErrors", () => {
     expect(statusOf(entries)!.message).toContain("No .sandcastle/");
   });
 
-  it("routes TimeoutError through Display with timeout seconds", async () => {
+  it("routes AgentIdleTimeoutError through Display with timeout seconds", async () => {
     const entries = await runWithDisplay(
       withFriendlyErrors(
         Effect.fail(
-          new TimeoutError({
+          new AgentIdleTimeoutError({
             message:
               "Agent idle for 600 seconds — no output received. Consider increasing the idle timeout with --idle-timeout.",
-            idleTimeoutSeconds: 600,
+            timeoutMs: 600_000,
           }),
         ),
       ),
