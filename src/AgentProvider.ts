@@ -319,13 +319,16 @@ export const junie = (
   _options?: JunieOptions,
 ): AgentProvider => ({
   name: "junie",
+  env: {},
 
-  buildPrintCommand(prompt: string): string {
-    return `junie --print --model ${shellEscape(model)} -p ${shellEscape(prompt)}`;
+  buildPrintCommand({ prompt }: AgentCommandOptions): string {
+    return `junie --model ${shellEscape(model)} --task ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(_prompt: string): string[] {
-    return ["junie", "--model", model];
+  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
+    const args = ["junie", "--model", model];
+    if (prompt) args.push("--task", prompt);
+    return args;
   },
 
   parseStreamLine(line: string): ParsedStreamEvent[] {

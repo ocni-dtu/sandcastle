@@ -19,7 +19,7 @@ import {
   type ExecResult,
   type SandboxProvider,
 } from "./SandboxProvider.js";
-import { makeLocalSandboxLayer } from "./testSandbox.js";
+import { makeLocalSandboxLayer, createIsolatedGitEnv } from "./testSandbox.js";
 
 const execAsync = promisify(exec);
 
@@ -378,8 +378,9 @@ describe("worktree.run()", () => {
   const makeRunTestProvider = (
     mockAgentBehavior: (cwd: string) => Promise<string> = async () =>
       "mock output",
-  ) =>
-    createBindMountSandboxProvider({
+  ) => {
+    const gitEnv = createIsolatedGitEnv();
+    return createBindMountSandboxProvider({
       name: "test-run",
       create: async (options) => {
         const handle: BindMountSandboxHandle = {
@@ -409,6 +410,7 @@ describe("worktree.run()", () => {
               cwd,
               encoding: "utf-8",
               stdio: ["pipe", "pipe", "pipe"],
+              env: { ...process.env, ...gitEnv },
             });
             return { stdout: result, stderr: "", exitCode: 0 };
           },
@@ -417,6 +419,7 @@ describe("worktree.run()", () => {
         return handle;
       },
     });
+  };
 
   it("runs agent and returns WorktreeRunResult", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "ws-run-"));

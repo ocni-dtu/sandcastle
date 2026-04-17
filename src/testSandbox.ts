@@ -3,7 +3,7 @@
  * This replaces FilesystemSandbox which has been removed.
  */
 import { Effect, Layer } from "effect";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, execSync } from "node:child_process";
 import { copyFile, mkdir } from "node:fs/promises";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,11 +16,22 @@ import { type ExecResult, Sandbox } from "./SandboxFactory.js";
  * Creates an isolated git global config env so that test sandbox
  * `git config --global` writes don't corrupt the developer's real ~/.gitconfig.
  */
-const createIsolatedGitEnv = (): Record<string, string> => {
+export const createIsolatedGitEnv = (): Record<string, string> => {
   const tmpDir = mkdtempSync(join(tmpdir(), "test-gitconfig-"));
   const globalConfigPath = join(tmpDir, ".gitconfig");
   writeFileSync(globalConfigPath, "");
-  return { GIT_CONFIG_GLOBAL: globalConfigPath };
+
+  // Pre-set a default identity in the isolated config so that tests can commit
+  execSync(`git config --file "${globalConfigPath}" user.name "Test"`);
+  execSync(
+    `git config --file "${globalConfigPath}" user.email "test@test.com"`,
+  );
+
+  return {
+    GIT_CONFIG_GLOBAL: globalConfigPath,
+    // Some older git versions or environments might still look at HOME for .gitconfig
+    HOME: tmpDir,
+  };
 };
 
 export const makeLocalSandboxLayer = (

@@ -10,6 +10,7 @@ import {
   type InteractiveExecOptions,
 } from "./SandboxProvider.js";
 import { claudeCode, pi, codex, opencode } from "./AgentProvider.js";
+import { createIsolatedGitEnv } from "./testSandbox.js";
 
 // --- buildInteractiveArgs prompt tests ---
 
@@ -114,8 +115,10 @@ describe("interactive()", () => {
       args: string[],
       opts: InteractiveExecOptions,
     ) => Promise<{ exitCode: number }>,
-  ) =>
-    createBindMountSandboxProvider({
+  ) => {
+    const gitEnv = createIsolatedGitEnv();
+    const env = { ...process.env, ...gitEnv };
+    return createBindMountSandboxProvider({
       name: "test-interactive",
       create: async (options) => {
         const handle: BindMountSandboxHandle = {
@@ -125,6 +128,7 @@ describe("interactive()", () => {
               cwd: options.worktreePath,
               encoding: "utf-8",
               stdio: ["pipe", "pipe", "pipe"],
+              env,
             });
             return { stdout: result, stderr: "", exitCode: 0 };
           },
@@ -134,6 +138,7 @@ describe("interactive()", () => {
         return handle;
       },
     });
+  };
 
   it("returns InteractiveResult with exitCode, branch, and commits", async () => {
     const provider = makeTestProvider(async (_args, _opts) => {

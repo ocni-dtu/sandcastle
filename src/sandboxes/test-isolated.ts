@@ -11,6 +11,7 @@ import { copyFile, cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { createIsolatedGitEnv } from "../testSandbox.js";
 import {
   createIsolatedSandboxProvider,
   type ExecResult,
@@ -33,6 +34,9 @@ export const testIsolated = (): IsolatedSandboxProvider =>
       const worktreePath = join(sandboxRoot, "workspace");
       await mkdir(worktreePath, { recursive: true });
 
+      const gitEnv = createIsolatedGitEnv();
+      const env = { ...process.env, ...gitEnv };
+
       return {
         worktreePath,
 
@@ -50,6 +54,7 @@ export const testIsolated = (): IsolatedSandboxProvider =>
               const proc = spawn("sh", ["-c", command], {
                 cwd: options?.cwd ?? worktreePath,
                 stdio: ["ignore", "pipe", "pipe"],
+                env,
               });
 
               const stdoutChunks: string[] = [];
@@ -86,6 +91,7 @@ export const testIsolated = (): IsolatedSandboxProvider =>
               {
                 cwd: options?.cwd ?? worktreePath,
                 maxBuffer: 10 * 1024 * 1024,
+                env,
               },
               (error, stdout, stderr) => {
                 if (error && error.code === undefined) {

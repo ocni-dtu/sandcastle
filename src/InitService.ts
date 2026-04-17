@@ -174,7 +174,7 @@ WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
 `;
 
-const JUNIE_DOCKERFILE = `FROM node:22-bookworm
+const JUNIE_DOCKERFILE = `FROM node:24-bookworm
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \\
@@ -194,19 +194,19 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
 # Create a non-root user
 RUN useradd -m -s /bin/bash agent
 
+USER agent
+
 # Install Junie CLI
 RUN curl -fsSL https://junie.jetbrains.com/install.sh | bash
-
-USER agent
 
 # Add Junie to PATH
 ENV PATH="/home/agent/.local/bin:$PATH"
 
 WORKDIR /home/agent
 
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_WORKSPACE_DIR}
-# and overrides the working directory to ${SANDBOX_WORKSPACE_DIR} at container start.
-# Structure your Dockerfile so that ${SANDBOX_WORKSPACE_DIR} can serve as the project root.
+# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_REPO_DIR}
+# and overrides the working directory to ${SANDBOX_REPO_DIR} at container start.
+# Structure your Dockerfile so that ${SANDBOX_REPO_DIR} can serve as the project root.
 ENTRYPOINT ["sleep", "infinity"]
 `;
 
@@ -251,9 +251,11 @@ OPENCODE_API_KEY=`,
   {
     name: "junie",
     label: "Junie",
-    defaultModel: "gpt-4o",
+    defaultModel: "gemini-3-flash",
     factoryImport: "junie",
     dockerfileTemplate: JUNIE_DOCKERFILE,
+    envExample: `# Junie requires JUNIE_API_KEY
+JUNIE_API_KEY=`,
   },
 ];
 

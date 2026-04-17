@@ -576,7 +576,7 @@ describe("junie factory", () => {
 
   it("buildPrintCommand includes the model and --print flag", () => {
     const provider = junie("gpt-4o");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("gpt-4o");
     expect(command).toContain("--print");
     expect(command).toContain("-p");
@@ -584,19 +584,19 @@ describe("junie factory", () => {
 
   it("buildPrintCommand shell-escapes the prompt", () => {
     const provider = junie("gpt-4o");
-    const command = provider.buildPrintCommand("it's a test");
+    const command = provider.buildPrintCommand(opts("it's a test"));
     expect(command).toContain("'it'\\''s a test'");
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
     const provider = junie("gpt-4o");
-    const command = provider.buildPrintCommand("do something");
+    const command = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--model 'gpt-4o'");
   });
 
   it("buildInteractiveArgs includes the binary and model", () => {
     const provider = junie("gpt-4o");
-    const args = provider.buildInteractiveArgs("");
+    const args = provider.buildInteractiveArgs!(opts(""));
     expect(args[0]).toBe("junie");
     expect(args).toContain("gpt-4o");
     expect(args).toContain("--model");
@@ -651,8 +651,8 @@ describe("junie factory", () => {
   it("bakes model into each provider instance independently", () => {
     const provider1 = junie("model-a");
     const provider2 = junie("model-b");
-    expect(provider1.buildPrintCommand("test")).toContain("model-a");
-    expect(provider2.buildPrintCommand("test")).toContain("model-b");
-    expect(provider1.buildPrintCommand("test")).not.toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).toContain("model-a");
+    expect(provider2.buildPrintCommand(opts("test"))).toContain("model-b");
+    expect(provider1.buildPrintCommand(opts("test"))).not.toContain("model-b");
   });
 });
